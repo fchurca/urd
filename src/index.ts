@@ -72,7 +72,7 @@ export function verifyOpenSecret(open: OpenSecret): void {
     .update(open.seqId.toString())
     .update(open.secret)
     .digest("hex");
-  if (fingerprint !== open.fingerprint) throw new Error("Opened secret does not match fingerprint");
+  if (fingerprint !== open.fingerprint) throw new Error("Secret does not match fingerprint");
 }
 
 export function createGenesisState(data: string, timestamp: number, sides?: number): GameState {
@@ -104,7 +104,7 @@ export function verifyChain(states: readonly GameState[]): void {
     if (state.hash !== expectedHash) throw new Error(`State ${state.hash.slice(0, 8)}... hash is invalid`);
     if (i > 0) {
       const prev = at(states, i - 1);
-      if (state.prevHash !== prev.hash) throw new Error(`chain broken at ${state.hash.slice(0, 8)}...: prevHash does not match previous state`);
+      if (state.prevHash !== prev.hash) throw new Error(`Chain broken at ${state.hash.slice(0, 8)}...: prevHash does not match previous state`);
     } else {
       if (state.prevHash !== null) throw new Error(`Genesis state ${state.hash.slice(0, 8)}... has prevHash, expected null`);
     }
@@ -173,7 +173,7 @@ export interface ChallengeEvent {
 
 export function verifyChallenge(pool: SecretPoolState, challenge: ChallengeEvent): void {
   const next = nextChallenge(pool);
-  if (!next) throw new Error("No pending challenge for pool");
+  if (!next) throw new Error("No pending challenge");
   if (challenge.targetAuthor !== pool.author) throw new Error("Challenge target author does not match pool author");
   if (challenge.seed !== next.seed) throw new Error("Challenge seed does not match next commitment");
   if (challenge.seqId !== next.seqId) throw new Error("Challenge seqId does not match next commitment");

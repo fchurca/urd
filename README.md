@@ -133,14 +133,14 @@ table below documents every rejection reason across the API.
 |---|---|
 | `Chain is empty` | `states` array has length 0 |
 | `State abc... hash is invalid` | A state's `hash` field does not match `hashState(data, prevHash, timestamp, sides)` |
-| `chain broken at abc...: prevHash does not match previous state` | A non-genesis state's `prevHash` does not reference the previous state's hash |
+| `Chain broken at abc...: prevHash does not match previous state` | A non-genesis state's `prevHash` does not reference the previous state's hash |
 | `Genesis state abc... has prevHash, expected null` | The first state has a non-null `prevHash` |
 
 #### `verifyOpenSecret(open)`
 
 | Error message | When |
 |---|---|
-| `Opened secret does not match fingerprint` | `hash(seed + author + seq_id + secret)` does not equal `open.fingerprint` |
+| `Secret does not match fingerprint` | `hash(seed + author + seq_id + secret)` does not equal `open.fingerprint` |
 
 #### `verifyReveal(author, expectedFingerprint, reveal, states)`
 
@@ -155,7 +155,7 @@ table below documents every rejection reason across the API.
 
 | Error message | When |
 |---|---|
-| `No pending challenge for pool` | All commitments have been consumed |
+| `No pending challenge` | All commitments have been consumed |
 | `Challenge target author does not match pool author` | `challenge.targetAuthor !== pool.author` |
 | `Challenge seed does not match next commitment` | Seed does not match the next unconsumed commitment |
 | `Challenge seqId does not match next commitment` | `challenge.seqId` does not match the next available `seqId` |

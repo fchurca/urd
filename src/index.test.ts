@@ -811,7 +811,7 @@ describe("verifyGame", () => {
     const g2 = createGenesisState("rogue", 1);
     const result = verifyGame([g1, g2], {}, {}, {});
     equal(result.valid, false);
-    ok(result.errors.some((e: string) => e.includes("chain")));
+    ok(result.errors.some((e: string) => e.includes("Chain")));
   });
 
   it("fails when reveal references unknown state hash", () => {
