@@ -725,7 +725,7 @@ describe("Security properties", () => {
     doesNotThrow(() => verifyReveal("alice", closed.fingerprint, reveal, [g]));
   });
 
-  it("replay of same reveal on different state yields different roll and fails original verification", () => {
+  it("rejects a reveal where claimed roll was derived from a different state hash", () => {
     const closed = createClosedSecret("bob", 0, "s", "");
     const gA = createGenesisState("state-a", 0, 20);
     const gB = createGenesisState("state-b", 1, 20);
@@ -965,5 +965,12 @@ describe("verifyGame", () => {
     const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
     equal(result.valid, false);
     ok(result.errors.some((e: string) => e.includes("must be a finite integer >= 2")));
+  });
+
+  it("fails when opened secrets reference an author without initial commitments", () => {
+    const g1 = createGenesisState("start", 0);
+    const result = verifyGame([g1], {}, {}, { bob: [{ seed: "", author: "bob", seqId: 0, fingerprint: "a".repeat(64), secret: "x" }] });
+    equal(result.valid, false);
+    ok(result.errors.some((e: string) => e.includes("no initial commitments")));
   });
 });

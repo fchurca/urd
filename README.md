@@ -174,6 +174,7 @@ table below documents every rejection reason across the API.
 |---|---|
 | (propagated from `verifyChain`) | Chain validation fails (short-circuits, no further checks) |
 | `Author ${author} has reveals but no initial commitments` | A reveal exists for an author not in `initialCommitments` |
+| `Author ${author} has opened secrets but no initial commitments` | Opened secrets exist for an author not in `initialCommitments` |
 | `Pool reconstruction failed for ${author}: ${msg}` | `reconstructPool` / `revealSecret` threw (e.g., wrong secret, bad seqId, invalid `newFingerprint`) |
 | `Missing opened secrets for ${author}: have ${have}, need ${need}` | Fewer opened secrets than consumed commitments |
 | `Pool fingerprint mismatch for ${author}: ${msg}` | `verifyPoolFingerprints` threw (commitment not found or secret mismatch) |

@@ -275,6 +275,12 @@ export function verifyGame(
     }
   }
 
+  for (const author of Object.keys(openedSecrets)) {
+    if (!(author in initialCommitments)) {
+      errors.push(`Author ${author} has opened secrets but no initial commitments`);
+    }
+  }
+
   for (const [author, commitments] of Object.entries(initialCommitments)) {
     const authorReveals = reveals[author] ?? [];
     const authorOpened = openedSecrets[author] ?? [];
