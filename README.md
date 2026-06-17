@@ -92,7 +92,7 @@ is invalid, the game is unrecoverable and all subsequent checks are skipped.
 **Hidden information / self-challenge**: the same challenge-reveal mechanism
 serves private draws (e.g., a hand of cards). A player can **self-challenge**
  — call `nextChallenge` on their own commitment pool, then `processReveal`
-with their own secret to consume the fingerprint privately (mutates pool state). The derived
+with their own secret to consume the fingerprint privately (returns an updated pool). The derived
 result stays hidden until the player later publishes it (e.g., playing the
 drawn card).
 
@@ -104,7 +104,7 @@ accepts any revealer as long as the secret matches the fingerprint.
 **Flow for a private draw:**
 1. Player calls `nextChallenge(pool)` — the pool can be their own or a peer's
 2. Player (or peer) calls `processReveal(pool, reveal, states)` to
-   consume the commitment and get a deterministic roll (mutates pool state)
+   consume the commitment and get a deterministic roll (returns an updated pool)
 3. The roll is not published yet — the player keeps it in their private state
 4. When the hidden information must be revealed (e.g., playing the card),
    the player publishes the roll and the reveal details for verification
@@ -159,7 +159,7 @@ table below documents every rejection reason across the API.
 
 > `expectedFingerprint` is the `fingerprint` field from the `ClosedSecret` (the commitment published at game start). The caller extracts this from the commitment that corresponds to this reveal's `seqId`.
 
-> **`verifyReveal` is read-only.** The sibling function `processReveal` performs the same checks but also mutates pool state (consumes the commitment, appends a new one). Use `processReveal` during gameplay; use `verifyReveal` for post-hoc audit.
+> **`verifyReveal` is read-only.** The sibling function `processReveal` performs the same checks but also returns an updated pool (consumes the commitment, appends a new one). Use `processReveal` during gameplay; use `verifyReveal` for post-hoc audit.
 
 #### `verifyChallenge(pool, challenge)`
 
@@ -242,7 +242,7 @@ Relevant tags:
      `createNextState`)
    - [x] Chain verification (`verifyChain`)
    - [x] Secret types and commitment (`ClosedSecret`, `OpenSecret`,
-     `createClosedSecret`, `openSecret`, `verifyOpenSecret`)
+     `createClosedSecret`, `createOpenSecret`, `verifyOpenSecret`)
    - [x] Roll derivation with rejection sampling (`deriveRoll`)
    - [x] Challenge / reveal mechanism (`SecretPoolState`, `createPool`,
      `nextChallenge`, `processReveal`, `verifyReveal`)

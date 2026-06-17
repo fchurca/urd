@@ -6,7 +6,7 @@ import {
   createNextState,
   verifyChain,
   createClosedSecret,
-  openSecret,
+  createOpenSecret,
   verifyOpenSecret,
   deriveRoll,
   createPool,
@@ -158,7 +158,7 @@ describe("Secret pool", () => {
 
   it("opens a closed secret into an open secret", () => {
     const closed = createClosedSecret("alice", 0, "my-secret", "g");
-    const opened = openSecret(closed, "my-secret");
+    const opened = createOpenSecret(closed, "my-secret");
     equal(opened.author, "alice");
     equal(opened.seqId, 0);
     equal(opened.seed, "g");
@@ -168,13 +168,13 @@ describe("Secret pool", () => {
 
   it("verifies an open secret matches its fingerprint", () => {
     const closed = createClosedSecret("alice", 0, "my-secret", "g");
-    const opened = openSecret(closed, "my-secret");
+    const opened = createOpenSecret(closed, "my-secret");
     doesNotThrow(() => verifyOpenSecret(opened));
   });
 
   it("throws when opening a closed secret with the wrong secret", () => {
     const closed = createClosedSecret("alice", 0, "my-secret", "");
-    throws(() => openSecret(closed, "wrong-secret"));
+    throws(() => createOpenSecret(closed, "wrong-secret"));
   });
 
   it("rejects an open secret with wrong secret via verifyOpenSecret", () => {
@@ -595,7 +595,7 @@ describe("Pool fingerprint verification", () => {
       { seed: "", seqId: 1, secret: "s1", newFingerprint: r1.fingerprint, stateHash: g.hash, claimedRoll: deriveRoll(g.hash, "s1", 20) },
     ];
     const pool = reconstructPool("alice", [s0, s1], reveals, [g]);
-    const opened = [openSecret(s0, "s0"), openSecret(s1, "s1")];
+    const opened = [createOpenSecret(s0, "s0"), createOpenSecret(s1, "s1")];
     doesNotThrow(() => verifyPoolFingerprints(pool, opened));
   });
 
@@ -629,7 +629,7 @@ describe("Pool fingerprint verification", () => {
     }, [g]);
     pool = result.updatedPool;
     equal(pool.consumedCount, 1);
-    const opened = openSecret(replenished, "r");
+    const opened = createOpenSecret(replenished, "r");
     throws(() => verifyPoolFingerprints(pool, [opened]));
   });
 
@@ -649,7 +649,7 @@ describe("Pool fingerprint verification", () => {
     }, [g]);
     pool = result.updatedPool;
     equal(pool.consumedCount, 1);
-    const opened = openSecret(s0, "s0");
+    const opened = createOpenSecret(s0, "s0");
     throws(() => verifyPoolFingerprints(pool, [opened, opened]));
   });
 
@@ -669,7 +669,7 @@ describe("Pool fingerprint verification", () => {
     }, [g]);
     pool = result.updatedPool;
     equal(pool.consumedCount, 1);
-    const opened = openSecret(s0, "s0");
+    const opened = createOpenSecret(s0, "s0");
     const extra = { seed: "", author: "alice", seqId: 99, fingerprint: "x".repeat(64), secret: "y" };
     throws(() => verifyPoolFingerprints(pool, [opened, extra]));
   });
@@ -823,6 +823,7 @@ describe("Security properties", () => {
     throws(() => deriveRoll("any", "thing", 1));
     throws(() => deriveRoll("any", "thing", 0));
     throws(() => deriveRoll("any", "thing", -1));
+    throws(() => deriveRoll("any", "thing", 2 ** 48 + 1));
   });
 });
 
@@ -840,7 +841,7 @@ describe("verifyGame", () => {
       stateHash: g2.hash,
       claimedRoll: roll,
     }];
-    const opened = [openSecret(closed, "s0")];
+    const opened = [createOpenSecret(closed, "s0")];
     const result = verifyGame(
       [g1, g2],
       { alice: [closed] },
@@ -973,7 +974,7 @@ describe("verifyGame", () => {
       stateHash: g2.hash,
       claimedRoll: roll,
     }];
-    const opened = [openSecret(closed, "s"), openSecret(closed, "s")];
+    const opened = [createOpenSecret(closed, "s"), createOpenSecret(closed, "s")];
     const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, { alice: opened });
     equal(result.valid, false);
     ok(result.errors.some((e: string) => e.includes("have 2, need 1")));

@@ -49,7 +49,7 @@ export function createClosedSecret(author: string, seqId: number, secret: string
   return { seed, author, seqId, fingerprint };
 }
 
-export function openSecret(closed: ClosedSecret, secret: string): OpenSecret {
+export function createOpenSecret(closed: ClosedSecret, secret: string): OpenSecret {
   const fingerprint = createHash("sha256")
     .update(closed.seed)
     .update(closed.author)
@@ -113,8 +113,8 @@ export function verifyChain(states: readonly GameState[]): void {
 }
 
 export function deriveRoll(stateHash: string, secret: string, sides: number): number {
-  if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2) throw new Error("Roll sides must be a finite integer >= 2");
   const maxVal = 2 ** 48;
+  if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2 || sides > maxVal) throw new Error("Roll sides must be a finite integer >= 2 and ≤ 2^48");
   const maxAcceptable = maxVal - (maxVal % sides);
   let hash = createHash("sha256")
     .update(stateHash)
@@ -153,13 +153,13 @@ export function createPool(author: string, commitments: ClosedSecret[]): SecretP
   return { author, commitments: sorted, consumedCount: 0 };
 }
 
-export interface Challenge {
+export interface NextChallenge {
   seed: string;
   seqId: number;
   fingerprint: string;
 }
 
-export function nextChallenge(pool: SecretPoolState): Challenge | null {
+export function nextChallenge(pool: SecretPoolState): NextChallenge | null {
   if (pool.consumedCount >= pool.commitments.length) return null;
   const next = at(pool.commitments, pool.consumedCount);
   return { seed: next.seed, seqId: next.seqId, fingerprint: next.fingerprint };
