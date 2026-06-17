@@ -42,6 +42,12 @@ result is dealt using the public game state.
    The initial pool can be as small as one fingerprint; new fingerprints are
    appended during each reveal (with incremented `seq_id`).
 
+   The `seed` is a per-game identifier that binds all commitments within a
+   pool to the same game. It prevents cross-game replay: a secret revealed
+   in game X cannot be reused in game Y because the fingerprints differ
+   (the seed is part of the hash). All commitments in a pool share the same
+   seed — `createPool` enforces this equality.
+
 2. **Game state chain**: linked Nostr events where each state references the
    previous one (event `e` tag)
 
@@ -85,20 +91,20 @@ is invalid, the game is unrecoverable and all subsequent checks are skipped.
 
 **Hidden information / self-challenge**: the same challenge-reveal mechanism
 serves private draws (e.g., a hand of cards). A player can **self-challenge**
-— call `nextChallenge` on their own commitment pool, then `revealSecret`
-with their own secret to consume the fingerprint privately. The derived
+ — call `nextChallenge` on their own commitment pool, then `processReveal`
+with their own secret to consume the fingerprint privately (mutates pool state). The derived
 result stays hidden until the player later publishes it (e.g., playing the
 drawn card).
 
 Alternatively, a player can ask a peer to reveal a secret for the same
 purpose. In either case, the protocol does not care who initiated the
-challenge — `verifyChallenge` accepts any challenger, and `revealSecret`
+challenge — `verifyChallenge` accepts any challenger, and `processReveal`
 accepts any revealer as long as the secret matches the fingerprint.
 
 **Flow for a private draw:**
 1. Player calls `nextChallenge(pool)` — the pool can be their own or a peer's
-2. Player (or peer) calls `revealSecret(pool, challenge, secret, ...)` to
-   consume the commitment and get a deterministic roll
+2. Player (or peer) calls `processReveal(pool, reveal, states)` to
+   consume the commitment and get a deterministic roll (mutates pool state)
 3. The roll is not published yet — the player keeps it in their private state
 4. When the hidden information must be revealed (e.g., playing the card),
    the player publishes the roll and the reveal details for verification
@@ -151,6 +157,10 @@ table below documents every rejection reason across the API.
 | (propagated from `lookupSides`) | State not found, missing sides, or invalid sides in the referenced state |
 | `Claimed roll does not match computed roll` | `deriveRoll(stateHash, secret, sides) !== reveal.claimedRoll` |
 
+> `expectedFingerprint` is the `fingerprint` field from the `ClosedSecret` (the commitment published at game start). The caller extracts this from the commitment that corresponds to this reveal's `seqId`.
+
+> **`verifyReveal` is read-only.** The sibling function `processReveal` performs the same checks but also mutates pool state (consumes the commitment, appends a new one). Use `processReveal` during gameplay; use `verifyReveal` for post-hoc audit.
+
 #### `verifyChallenge(pool, challenge)`
 
 | Error message | When |
@@ -175,11 +185,13 @@ table below documents every rejection reason across the API.
 | (propagated from `verifyChain`) | Chain validation fails (short-circuits, no further checks) |
 | `Author ${author} has reveals but no initial commitments` | A reveal exists for an author not in `initialCommitments` |
 | `Author ${author} has opened secrets but no initial commitments` | Opened secrets exist for an author not in `initialCommitments` |
-| `Pool reconstruction failed for ${author}: ${msg}` | `reconstructPool` / `revealSecret` threw (e.g., wrong secret, bad seqId, invalid `newFingerprint`) |
-| `Missing opened secrets for ${author}: have ${have}, need ${need}` | Fewer opened secrets than consumed commitments |
+| `Pool reconstruction failed for ${author}: ${msg}` | `reconstructPool` / `processReveal` threw (e.g., wrong secret, bad seqId, invalid `newFingerprint`) |
+| `Opened secrets count for ${author}: have ${have}, need ${need}` | Wrong number of opened secrets for the consumed commitments |
 | `Pool fingerprint mismatch for ${author}: ${msg}` | `verifyPoolFingerprints` threw (commitment not found or secret mismatch) |
 | `Reveal seqId ${n} by ${author} references unknown state ${hash}...` | `reveal.stateHash` is not in the verified chain |
 | `Reveal seqId ${n} by ${author} has sides ${sides}, expected ${expected}` | The state's `sides` does not match `expectedSides` |
+
+> `openedSecrets` must contain one `OpenSecret` per consumed commitment (i.e., per reveal that was processed). Passing an empty or mismatched record will trigger a count mismatch error.
 
 ### Design Decisions
 
@@ -233,7 +245,7 @@ Relevant tags:
      `createClosedSecret`, `openSecret`, `verifyOpenSecret`)
    - [x] Roll derivation with rejection sampling (`deriveRoll`)
    - [x] Challenge / reveal mechanism (`SecretPoolState`, `createPool`,
-     `nextChallenge`, `revealSecret`, `verifyReveal`)
+     `nextChallenge`, `processReveal`, `verifyReveal`)
    - [x] Challenge event type and verification (`ChallengeEvent`,
      `verifyChallenge`)
    - [x] Pool reconstruction from event history (`reconstructPool`)

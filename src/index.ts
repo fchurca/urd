@@ -39,6 +39,7 @@ function hashState(data: string, prevHash: string | null, timestamp: number, sid
 }
 
 export function createClosedSecret(author: string, seqId: number, secret: string, seed: string): ClosedSecret {
+  if (!Number.isFinite(seqId) || !Number.isInteger(seqId) || seqId < 0) throw new Error("seqId must be a non-negative integer");
   const fingerprint = createHash("sha256")
     .update(seed)
     .update(author)
@@ -138,6 +139,7 @@ export interface SecretPoolState {
 }
 
 export function createPool(author: string, commitments: ClosedSecret[]): SecretPoolState {
+  if (commitments.length === 0) throw new Error("Pool must have at least one commitment");
   const sorted = [...commitments].sort((a, b) => a.seqId - b.seqId);
   for (let i = 1; i < sorted.length; i++) {
     if (at(sorted, i).seqId === at(sorted, i - 1).seqId) throw new Error("Duplicate seqId in pool");
@@ -194,7 +196,7 @@ export interface RevealOutput {
   updatedPool: SecretPoolState;
 }
 
-export function revealSecret(pool: SecretPoolState, reveal: Reveal, states: readonly GameState[]): RevealOutput {
+export function processReveal(pool: SecretPoolState, reveal: Reveal, states: readonly GameState[]): RevealOutput {
   if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) throw new Error("newFingerprint must be a 64-char hex string");
   const challenge = nextChallenge(pool);
   if (!challenge) throw new Error("No pending challenge");
@@ -288,8 +290,8 @@ export function verifyGame(
     let poolReconstructFailed = false;
     try {
       const pool = reconstructPool(author, [...commitments], [...authorReveals], states);
-      if (authorOpened.length < pool.consumedCount) {
-        errors.push(`Missing opened secrets for ${author}: have ${authorOpened.length}, need ${pool.consumedCount}`);
+      if (authorOpened.length !== pool.consumedCount) {
+        errors.push(`Opened secrets count for ${author}: have ${authorOpened.length}, need ${pool.consumedCount}`);
       } else {
         try {
           verifyPoolFingerprints(pool, [...authorOpened]);
@@ -325,7 +327,7 @@ export function reconstructPool(
 ): SecretPoolState {
   let pool = createPool(author, commitments);
   for (const reveal of reveals) {
-    const result = revealSecret(pool, reveal, states);
+    const result = processReveal(pool, reveal, states);
     pool = result.updatedPool;
   }
   return pool;
@@ -347,11 +349,20 @@ export function findStateInChain(chain: readonly GameState[], hash: string): Gam
 }
 
 export function verifyPoolFingerprints(pool: SecretPoolState, opened: OpenSecret[]): void {
+  if (opened.length !== pool.consumedCount) throw new Error(`Expected ${pool.consumedCount} opened secrets, got ${opened.length}`);
+  const matched = new Array<boolean>(pool.consumedCount).fill(false);
   for (const open of opened) {
-    const match = pool.commitments.slice(0, pool.consumedCount).find(
-      (c) => c.author === open.author && c.seqId === open.seqId && c.seed === open.seed,
-    );
-    if (!match) throw new Error(`Opened secret (author=${open.author}, seqId=${open.seqId}) not found in pool commitments`);
+    let found = false;
+    for (let i = 0; i < matched.length; i++) {
+      if (matched[i]!) continue;
+      const c = pool.commitments[i]!;
+      if (c.author === open.author && c.seqId === open.seqId && c.seed === open.seed) {
+        matched[i] = true;
+        found = true;
+        break;
+      }
+    }
+    if (!found) throw new Error(`Opened secret (author=${open.author}, seqId=${open.seqId}) not found in pool commitments`);
     verifyOpenSecret(open);
   }
 }
