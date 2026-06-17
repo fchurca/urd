@@ -48,6 +48,14 @@ result is dealt using the public game state.
    (the seed is part of the hash). All commitments in a pool share the same
    seed — `createPool` enforces this equality.
 
+   Every type that references a secret (`ClosedSecret`, `OpenSecret`, `Reveal`,
+   `ChallengeEvent`) carries its own `seed` field. This redundancy is
+   intentional: each record may arrive from a different wire event and must
+   be verifiable in isolation without cross-referencing other events.
+   `verifyChallenge` and `verifyReveal` both check that the on-wire seed
+   matches the expected pool commitment, ensuring the event belongs to the
+   correct game.
+
 2. **Game state chain**: linked Nostr events where each state references the
    previous one (event `e` tag)
 
@@ -111,6 +119,46 @@ accepts any revealer as long as the secret matches the fingerprint.
 
 No extra encryption is needed — hiding is achieved by delaying publication
 of the reveal event.
+
+### Quick Start
+
+A complete round — create a pool, challenge, reveal, and verify:
+
+```ts
+import {
+  createPool, createClosedSecret, createOpenSecret,
+  createGenesisState, deriveRoll, nextChallenge,
+  processReveal, verifyReveal, verifyPoolFingerprints,
+} from "urd";
+import type { Reveal } from "urd";
+
+// Player A commits to a secret pool
+const pool = createPool("alice", [
+  createClosedSecret("alice", 0, "my-secret", "game-1"),
+]);
+
+// Game state is established
+const state = createGenesisState("start", 1001, 20);
+
+// Challenger picks the oldest unused fingerprint
+const challenge = nextChallenge(pool);
+
+// Player A reveals the secret, gets a d20 roll and an updated pool
+const roll = deriveRoll(state.hash, "my-secret", 20);
+const reveal: Reveal = {
+  seed: "game-1",
+  seqId: 0,
+  secret: "my-secret",
+  newFingerprint: createClosedSecret("alice", 1, "next-secret", "game-1").fingerprint,
+  stateHash: state.hash,
+  claimedRoll: roll,
+};
+const { updatedPool } = processReveal(pool, reveal, [state]);
+
+// Any observer can verify after the fact
+verifyReveal("alice", pool.commitments[0]!.fingerprint, reveal, [state]);
+verifyPoolFingerprints(updatedPool, [createOpenSecret(pool.commitments[0]!, "my-secret")]);
+```
 
 ### Security Properties
 
@@ -192,6 +240,8 @@ table below documents every rejection reason across the API.
 | `Reveal seqId ${n} by ${author} has sides ${sides}, expected ${expected}` | The state's `sides` does not match `expectedSides` |
 
 > `openedSecrets` must contain one `OpenSecret` per consumed commitment (i.e., per reveal that was processed). Passing an empty or mismatched record will trigger a count mismatch error.
+>
+> All four maps (`initialCommitments`, `reveals`, `openedSecrets`) are keyed by author (the same string used in `createClosedSecret`). For a single-author game, each map has one entry; for multi-author games, each author has their own entry in each map.
 
 ### Design Decisions
 

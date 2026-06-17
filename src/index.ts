@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+/** A state in the game chain. Hash is computed from data, prevHash, timestamp, and optional sides. */
 export interface GameState {
   hash: string;
   prevHash: string | null;
@@ -8,6 +9,7 @@ export interface GameState {
   sides?: number;
 }
 
+/** A commitment: the public part of a secret before reveal. The fingerprint binds the secret to the seed, author, and seqId. */
 export interface ClosedSecret {
   seed: string;
   author: string;
@@ -15,6 +17,7 @@ export interface ClosedSecret {
   fingerprint: string;
 }
 
+/** An opened (revealed) secret: includes the raw secret alongside the commitment fields. */
 export interface OpenSecret {
   seed: string;
   author: string;
@@ -38,6 +41,16 @@ function hashState(data: string, prevHash: string | null, timestamp: number, sid
   return h.digest("hex");
 }
 
+/**
+ * Create a commitment (closed secret) from an author, sequence id, secret, and game seed.
+ * The fingerprint is `hash(seed + author + seqId + secret)`.
+ *
+ * @param author - Player identifier (e.g., Nostr pubkey)
+ * @param seqId - Monotonic sequence number within the author's pool
+ * @param secret - The raw secret to commit (must be kept hidden until reveal)
+ * @param seed - Per-game identifier that prevents cross-game replay
+ * @returns A ClosedSecret containing only public fields (seed, author, seqId, fingerprint)
+ */
 export function createClosedSecret(author: string, seqId: number, secret: string, seed: string): ClosedSecret {
   if (!Number.isFinite(seqId) || !Number.isInteger(seqId) || seqId < 0) throw new Error("seqId must be a non-negative integer");
   const fingerprint = createHash("sha256")
@@ -49,6 +62,14 @@ export function createClosedSecret(author: string, seqId: number, secret: string
   return { seed, author, seqId, fingerprint };
 }
 
+/**
+ * Open a closed secret by revealing the raw secret string, verifying it matches the fingerprint.
+ *
+ * @param closed - The commitment (ClosedSecret) to open
+ * @param secret - The raw secret that matches the commitment's fingerprint
+ * @returns An OpenSecret that includes the revealed secret
+ * @throws "Secret does not match fingerprint" if the secret does not hash to the committed fingerprint
+ */
 export function createOpenSecret(closed: ClosedSecret, secret: string): OpenSecret {
   const fingerprint = createHash("sha256")
     .update(closed.seed)
@@ -66,6 +87,10 @@ export function createOpenSecret(closed: ClosedSecret, secret: string): OpenSecr
   };
 }
 
+/**
+ * Verify that an OpenSecret's secret matches its fingerprint.
+ * Read-only — see README for rejection reasons.
+ */
 export function verifyOpenSecret(open: OpenSecret): void {
   const fingerprint = createHash("sha256")
     .update(open.seed)
@@ -76,6 +101,13 @@ export function verifyOpenSecret(open: OpenSecret): void {
   if (fingerprint !== open.fingerprint) throw new Error("Secret does not match fingerprint");
 }
 
+/**
+ * Create the first state in a game state chain.
+ *
+ * @param data - Opaque game data (e.g., move description)
+ * @param timestamp - Unix timestamp (seconds) for hash binding
+ * @param sides - Optional number of sides for dice rolls derived from this state
+ */
 export function createGenesisState(data: string, timestamp: number, sides?: number): GameState {
   return {
     hash: hashState(data, null, timestamp, sides),
@@ -86,6 +118,15 @@ export function createGenesisState(data: string, timestamp: number, sides?: numb
   };
 }
 
+/**
+ * Create a new state chained after a previous state.
+ * The new state's hash includes the previous state's hash (prevHash).
+ *
+ * @param prev - The predecessor GameState
+ * @param data - Opaque game data for this state
+ * @param timestamp - Unix timestamp (seconds) for hash binding
+ * @param sides - Optional number of sides for dice rolls derived from this state
+ */
 export function createNextState(prev: GameState, data: string, timestamp: number, sides?: number): GameState {
   const hash = hashState(data, prev.hash, timestamp, sides);
   return {
@@ -97,6 +138,10 @@ export function createNextState(prev: GameState, data: string, timestamp: number
   };
 }
 
+/**
+ * Verify a game state chain: hashes must be valid, links must connect, genesis must have null prevHash.
+ * See README for full error table.
+ */
 export function verifyChain(states: readonly GameState[]): void {
   if (states.length === 0) throw new Error("Chain is empty");
   for (let i = 0; i < states.length; i++) {
@@ -112,6 +157,15 @@ export function verifyChain(states: readonly GameState[]): void {
   }
 }
 
+/**
+ * Derive a deterministic roll in [1, sides] from a state hash and secret.
+ * Uses rejection sampling on a 48-bit hash digest to eliminate modulo bias.
+ *
+ * @param stateHash - The hash of the game state this roll is bound to
+ * @param secret - The revealed secret
+ * @param sides - Number of faces (must be a finite integer >= 2 and <= 2^48)
+ * @returns A value in [1, sides]
+ */
 export function deriveRoll(stateHash: string, secret: string, sides: number): number {
   const maxVal = 2 ** 48;
   if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2 || sides > maxVal) throw new Error("Roll sides must be a finite integer >= 2 and ≤ 2^48");
@@ -121,6 +175,9 @@ export function deriveRoll(stateHash: string, secret: string, sides: number): nu
     .update(secret)
     .digest("hex");
   let offset = 0;
+  // Rejection sampling against 48-bit values eliminates modulo bias.
+  // If val >= maxAcceptable the value falls outside the fair range
+  // and we re-roll by consuming the next 48-bit chunk from the hash.
   while (true) {
     if (offset + 12 > hash.length) {
       hash = createHash("sha256").update(hash).digest("hex");
@@ -132,12 +189,18 @@ export function deriveRoll(stateHash: string, secret: string, sides: number): nu
   }
 }
 
+/** A pool of commitments for one author, consumed in FIFO order. */
 export interface SecretPoolState {
   author: string;
   commitments: ClosedSecret[];
   consumedCount: number;
 }
 
+/**
+ * Create a secret pool from an author's initial commitments.
+ * Validates that all commitments share the same author, seed, and have unique seqIds.
+ * Commitments are sorted by seqId internally.
+ */
 export function createPool(author: string, commitments: ClosedSecret[]): SecretPoolState {
   if (commitments.length === 0) throw new Error("Pool must have at least one commitment");
   const sorted = [...commitments].sort((a, b) => a.seqId - b.seqId);
@@ -153,18 +216,24 @@ export function createPool(author: string, commitments: ClosedSecret[]): SecretP
   return { author, commitments: sorted, consumedCount: 0 };
 }
 
+/** The next expected challenge: the oldest unconsumed commitment from a pool. */
 export interface NextChallenge {
   seed: string;
   seqId: number;
   fingerprint: string;
 }
 
+/**
+ * Get the next expected challenge (oldest unconsumed commitment) from a pool.
+ * Returns null if all commitments have been consumed.
+ */
 export function nextChallenge(pool: SecretPoolState): NextChallenge | null {
   if (pool.consumedCount >= pool.commitments.length) return null;
   const next = at(pool.commitments, pool.consumedCount);
   return { seed: next.seed, seqId: next.seqId, fingerprint: next.fingerprint };
 }
 
+/** An on-wire challenge event from a challenger targeting a specific author's next commitment. */
 export interface ChallengeEvent {
   challenger: string;
   targetAuthor: string;
@@ -173,6 +242,11 @@ export interface ChallengeEvent {
   fingerprint: string;
 }
 
+/**
+ * Verify that a ChallengeEvent matches the next expected challenge for a pool.
+ * Checks author, seed, seqId, and fingerprint against the next unconsumed commitment.
+ * See README for full error table.
+ */
 export function verifyChallenge(pool: SecretPoolState, challenge: ChallengeEvent): void {
   const next = nextChallenge(pool);
   if (!next) throw new Error("No pending challenge");
@@ -182,6 +256,7 @@ export function verifyChallenge(pool: SecretPoolState, challenge: ChallengeEvent
   if (challenge.fingerprint !== next.fingerprint) throw new Error("Challenge fingerprint does not match next commitment");
 }
 
+/** A reveal event published by the secret owner. Binds the secret, the state hash, and the claimed roll. */
 export interface Reveal {
   seed: string;
   seqId: number;
@@ -191,11 +266,17 @@ export interface Reveal {
   claimedRoll: number;
 }
 
+/** The result of a processReveal call: the derived roll and the updated pool state. */
 export interface RevealOutput {
   roll: number;
   updatedPool: SecretPoolState;
 }
 
+/**
+ * Process a reveal against a pool: consume the next commitment, derive the roll, append a new commitment.
+ * Returns a RevealOutput with the roll and updated pool. The input pool is not mutated.
+ * See README for full error table.
+ */
 export function processReveal(pool: SecretPoolState, reveal: Reveal, states: readonly GameState[]): RevealOutput {
   if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) throw new Error("newFingerprint must be a 64-char hex string");
   const challenge = nextChallenge(pool);
@@ -232,6 +313,12 @@ export function processReveal(pool: SecretPoolState, reveal: Reveal, states: rea
   return { roll, updatedPool };
 }
 
+/**
+ * Verify a reveal without mutating pool state. Read-only alternative to processReveal.
+ * Checks that the secret matches the expected fingerprint, the state exists in the chain,
+ * and the claimed roll matches the computed roll.
+ * See README for full error table.
+ */
 export function verifyReveal(
   author: string,
   expectedFingerprint: string,
@@ -251,11 +338,24 @@ export function verifyReveal(
   if (roll !== reveal.claimedRoll) throw new Error("Claimed roll does not match computed roll");
 }
 
+/** The result of verifyGame: whether the game is valid and a list of error messages. */
 export interface VerifyGameResult {
   valid: boolean;
   errors: string[];
 }
 
+/**
+ * Verify a complete game: chain integrity, pool reconstruction, fingerprint matching,
+ * roll correctness, and side consistency. All checks run regardless of intermediate
+ * failures (errors are accumulated).
+ *
+ * @param states - The full game state chain
+ * @param initialCommitments - Map of author → their initial ClosedSecret commitments
+ * @param reveals - Map of author → their Reveal events (in order)
+ * @param openedSecrets - Map of author → their OpenSecret records (one per consumed commitment)
+ * @param expectedSides - Optional: if set, validates every reveal's state.sides matches
+ * @returns VerifyGameResult with valid flag and accumulated error messages
+ */
 export function verifyGame(
   states: readonly GameState[],
   initialCommitments: Record<string, readonly ClosedSecret[]>,
@@ -319,6 +419,16 @@ export function verifyGame(
   return { valid: errors.length === 0, errors };
 }
 
+/**
+ * Reconstruct a SecretPoolState from initial commitments and a sequence of reveals.
+ * Replays reveals in order via processReveal.
+ *
+ * @param author - Pool author
+ * @param commitments - Initial ClosedSecret commitments (will be sorted)
+ * @param reveals - Reveal events in chronological order
+ * @param states - Game state chain for roll derivation
+ * @returns The reconstructed SecretPoolState
+ */
 export function reconstructPool(
   author: string,
   commitments: ClosedSecret[],
@@ -333,6 +443,10 @@ export function reconstructPool(
   return pool;
 }
 
+/**
+ * Look up the `sides` value from a game state in the chain.
+ * Throws if the state is not found, missing sides, or has invalid sides.
+ */
 export function lookupSides(states: readonly GameState[], stateHash: string): number {
   const state = findStateInChain(states, stateHash);
   if (!state) throw new Error(`State ${stateHash.slice(0, 8)}... not found in chain`);
@@ -341,6 +455,9 @@ export function lookupSides(states: readonly GameState[], stateHash: string): nu
   return state.sides;
 }
 
+/**
+ * Find a GameState in the chain by its hash. Returns null if not found.
+ */
 export function findStateInChain(chain: readonly GameState[], hash: string): GameState | null {
   for (const state of chain) {
     if (state.hash === hash) return state;
@@ -348,6 +465,11 @@ export function findStateInChain(chain: readonly GameState[], hash: string): Gam
   return null;
 }
 
+/**
+ * Verify that opened secrets match the consumed commitments in a pool one-to-one.
+ * Each opened secret must correspond to a consumed commitment (by author, seqId, seed)
+ * and pass verifyOpenSecret. See README for error details.
+ */
 export function verifyPoolFingerprints(pool: SecretPoolState, opened: OpenSecret[]): void {
   if (opened.length !== pool.consumedCount) throw new Error(`Expected ${pool.consumedCount} opened secrets, got ${opened.length}`);
   const matched = new Array<boolean>(pool.consumedCount).fill(false);
