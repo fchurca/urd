@@ -29,12 +29,13 @@ function at<T>(arr: readonly T[], index: number): T {
   return val;
 }
 
-function hashState(data: string, prevHash: string | null, timestamp: number): string {
-  return createHash("sha256")
+function hashState(data: string, prevHash: string | null, timestamp: number, sides?: number): string {
+  const h = createHash("sha256")
     .update(data)
     .update(prevHash ?? "\0")
-    .update(timestamp.toString())
-    .digest("hex");
+    .update(timestamp.toString());
+  if (sides !== undefined) h.update(sides.toString());
+  return h.digest("hex");
 }
 
 export function createClosedSecret(author: string, seqId: number, secret: string, seed = ""): ClosedSecret {
@@ -76,7 +77,7 @@ export function verifyOpenSecret(open: OpenSecret): boolean {
 
 export function createGenesisState(data: string, timestamp: number, sides?: number): GameState {
   return {
-    hash: hashState(data, null, timestamp),
+    hash: hashState(data, null, timestamp, sides),
     prevHash: null,
     data,
     timestamp,
@@ -85,7 +86,7 @@ export function createGenesisState(data: string, timestamp: number, sides?: numb
 }
 
 export function createNextState(prev: GameState, data: string, timestamp: number, sides?: number): GameState {
-  const hash = hashState(data, prev.hash, timestamp);
+  const hash = hashState(data, prev.hash, timestamp, sides);
   return {
     hash,
     prevHash: prev.hash,
@@ -99,7 +100,7 @@ export function verifyChain(states: readonly GameState[]): boolean {
   if (states.length === 0) return false;
   for (let i = 0; i < states.length; i++) {
     const state = at(states, i);
-    const expectedHash = hashState(state.data, state.prevHash, state.timestamp);
+    const expectedHash = hashState(state.data, state.prevHash, state.timestamp, state.sides);
     if (state.hash !== expectedHash) return false;
     if (i > 0) {
       const prev = at(states, i - 1);
@@ -112,18 +113,23 @@ export function verifyChain(states: readonly GameState[]): boolean {
 }
 
 export function deriveRoll(stateHash: string, secret: string, sides: number): number {
-  if (sides <= 0) throw new Error("Roll sides must be positive");
-  const hash = createHash("sha256")
+  if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2) throw new Error("Roll sides must be a finite integer >= 2");
+  const maxVal = 2 ** 48;
+  const maxAcceptable = maxVal - (maxVal % sides);
+  let hash = createHash("sha256")
     .update(stateHash)
     .update(secret)
     .digest("hex");
-  const maxVal = 2 ** 48;
-  const maxAcceptable = maxVal - (maxVal % sides);
-  for (let offset = 0; offset + 12 <= hash.length; offset += 12) {
+  let offset = 0;
+  while (true) {
+    if (offset + 12 > hash.length) {
+      hash = createHash("sha256").update(hash).digest("hex");
+      offset = 0;
+    }
     const val = parseInt(hash.slice(offset, offset + 12), 16);
+    offset += 12;
     if (val < maxAcceptable) return (val % sides) + 1;
   }
-  return (parseInt(hash.slice(0, 12), 16) % sides) + 1;
 }
 
 export interface SecretPoolState {
@@ -191,6 +197,7 @@ export interface RevealOutput {
 }
 
 export function revealSecret(pool: SecretPoolState, reveal: Reveal, states: readonly GameState[]): RevealOutput {
+  if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) throw new Error("newFingerprint must be a 64-char hex string");
   const challenge = nextChallenge(pool);
   if (!challenge) throw new Error("No pending challenge");
   if (reveal.seqId !== challenge.seqId) throw new Error("seqId does not match next challenge");
@@ -231,6 +238,7 @@ export function verifyReveal(
   reveal: Reveal,
   states: readonly GameState[],
 ): boolean {
+  if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) return false;
   const fingerprint = createHash("sha256")
     .update(reveal.seed)
     .update(author)
@@ -264,6 +272,12 @@ export function verifyGame(
 
   if (!verifyChain(states)) {
     return { valid: false, errors: ["Game state chain is invalid — state chain must be valid before any other checks"] };
+  }
+
+  for (const author of Object.keys(reveals)) {
+    if (!(author in initialCommitments)) {
+      errors.push(`Author ${author} has reveals but no initial commitments`);
+    }
   }
 
   for (const [author, commitments] of Object.entries(initialCommitments)) {
@@ -319,6 +333,7 @@ export function lookupSides(states: readonly GameState[], stateHash: string): nu
   const state = findStateInChain(states, stateHash);
   if (!state) throw new Error(`State ${stateHash.slice(0, 8)}... not found in chain`);
   if (state.sides === undefined) throw new Error(`State ${stateHash.slice(0, 8)}... does not define sides`);
+  if (!Number.isFinite(state.sides) || !Number.isInteger(state.sides) || state.sides < 2) throw new Error(`State ${stateHash.slice(0, 8)}... sides must be a finite integer >= 2, got ${state.sides}`);
   return state.sides;
 }
 
@@ -331,7 +346,7 @@ export function findStateInChain(chain: readonly GameState[], hash: string): Gam
 
 export function verifyPoolFingerprints(pool: SecretPoolState, opened: OpenSecret[]): boolean {
   for (const open of opened) {
-    const match = pool.commitments.find(
+    const match = pool.commitments.slice(0, pool.consumedCount).find(
       (c) => c.author === open.author && c.seqId === open.seqId && c.seed === open.seed,
     );
     if (!match) return false;
