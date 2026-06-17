@@ -26,6 +26,12 @@ games (dice rolls, card draws, etc.) over Nostr, with these properties:
 - **Farm-resistant**: a player cannot choose whether to keep or discard a result
 - **Identity via pubkey**: uses existing Nostr keys for signing and authentication
 
+At a physical table, trust in randomness is solved by sharing custody: you
+shuffle the deck, another player cuts it, and everyone takes turns dealing.
+URD replicates this interaction digitally — each player locks in a shuffled
+pool of secrets, a peer cuts by selecting which one to reveal, and the
+result is dealt using the public game state.
+
 ## Proposed Design
 
 ### Components
@@ -70,6 +76,7 @@ Anyone verifies:
 - `hash(author + seq_id + secret) == fingerprint` (initial commitment holds)
 - `hash(state, secret)` produces the claimed result
 - new fingerprint is appended at end of A's pool with correct `seq_id`
+- the referenced state hash exists in the verified game state chain
 
 If A does not reveal within a reasonable time: forfeit (inactivity).
 
@@ -97,6 +104,23 @@ the player until later revealed. No extra encryption is needed.
   witness relays can accelerate challenge notification, but the protocol does
   not depend on them.
 
+### Repudiation
+
+Events carry a `timestamp` that commits to a point in time. This opens
+repudiation opportunities an honest player should avoid and a malicious one
+may exploit:
+
+| Opportunity | Risk | Mitigation |
+|---|---|---|
+| **Future timestamp** — player publishes a state with `timestamp` far in the future | If the game turns unfavorable, the player can claim their clock was wrong and repudiate the state as invalid | Use the median of several relay-observed timestamps; reject timestamps more than N hours ahead of relay time |
+| **Late reveal** — player does not reveal within a reasonable window after being challenged | The player can observe others' moves before deciding whether to reveal; if unfavorable, they can stay silent and later claim the challenge expired | Forfeit (loss of turn or game); the challenger proceeds without the roll — the game treats the secret as unrevealable |
+| **Missing challenge** — no one challenges a player in time | Without a fingerprint call-out, a player could sit on their secret indefinitely | A consensus round or relay-enforced deadline; the state is considered firm if unchallenged after N events |
+| **Clock disagreement** — two relays see different timestamps for the same event | Ambiguity about which state is canonical and which timestamps to use in hash derivation | Use relay-observed time (not event timestamp) for ordering; event timestamp is only used for hash binding |
+
+In a proof-of-concept or small game, these risks are tolerable. A production
+deployment should pick a concrete timeout (e.g., 7 days between challenge and
+reveal) enforced by social consensus or relay policy.
+
 ### Nostr Implementation
 
 Proposed new event kinds (e.g., 31000-31099 for games):
@@ -114,11 +138,6 @@ Relevant tags:
 - `seq_id`: sequence number within an author's secret pool (integer)
 - `roll`: dice type and result (e.g., "d20:15")
 
-### Open Questions
-
-1. Penalty for not revealing on time? Auto-forfeit after N events?
-   What if the challenger also disappears?
-
 ## Tasks
 
 1. Formalize the protocol in a whitepaper / specification document
@@ -129,14 +148,18 @@ Relevant tags:
    - [x] Chain verification (`verifyChain`)
    - [x] Secret types and commitment (`ClosedSecret`, `OpenSecret`,
      `createClosedSecret`, `openSecret`, `verifyOpenSecret`)
-   - [x] Roll derivation (`deriveRoll`)
-    - [x] Challenge / reveal mechanism (`SecretPoolState`, `createPool`,
-      `nextChallenge`, `revealSecret`, `verifyReveal`)
+   - [x] Roll derivation with rejection sampling (`deriveRoll`)
+   - [x] Challenge / reveal mechanism (`SecretPoolState`, `createPool`,
+     `nextChallenge`, `revealSecret`, `verifyReveal`)
+   - [x] Challenge event type and verification (`ChallengeEvent`,
+     `verifyChallenge`)
+   - [x] Pool reconstruction from event history (`reconstructPool`)
+   - [x] Pool fingerprint verification (`verifyPoolFingerprints`)
+   - [x] State lookup in chain (`findStateInChain`)
+   - [x] Composite game verification (`verifyGame`)
+   - [x] Security tests (farming resistance, non-reusability, determinism,
+     distribution uniformity)
 3. Build a browser-only demo client that plays a simple game
    (e.g., D&D ability check) over a Nostr test relay; the server is
    just a static file server, no backend logic
-4. Write security tests:
-   - Verify farming is impossible (same secrets -> same result)
-   - Verify secrets cannot be reused
-   - Verify results are deterministic wrt game state
-5. (future)
+4. (future)

@@ -1,4 +1,4 @@
-# URD: Verifiable Dice for Nostr Games
+# URD (URD's Roll Derivation): Verifiable Dice for Nostr Games
 
 ## 30-Second Pitch
 
@@ -21,6 +21,12 @@ need external infrastructure.
 
 For peer-to-peer tabletop gaming, there is no simple, async, shared-nothing
 way to get verifiable randomness.
+
+At a physical table, trust is built by sharing custody: you shuffle the
+deck, another player cuts it, and everyone takes turns dealing. URD
+replicates this interaction digitally — lock in a shuffled pool of secrets,
+let a peer cut by selecting which one to reveal, and deal the result using
+the public game state.
 
 ### The Solution
 
