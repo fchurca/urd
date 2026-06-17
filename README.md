@@ -2,9 +2,9 @@
 
 A Verifiable Randomness Protocol for Decentralized "Play-by-Nostr" Games
 
-**Status:** proof-of-concept — core state chain implemented (types, hashing,
-chain creation, verification). Remaining protocol components (secret pools,
-roll derivation, Nostr bindings) and demo client are planned but not yet built.
+**Status:** proof-of-concept — state chain, secret pool, roll derivation, and
+challenge/reveal mechanism implemented. Nostr bindings and demo client are
+planned but not yet built.
 
 ## Problem
 
@@ -39,8 +39,9 @@ games (dice rolls, card draws, etc.) over Nostr, with these properties:
 2. **Game state chain**: linked Nostr events where each state references the
    previous one (event `e` tag)
 
-3. **Roll derivation**: `roll = hash(state_hash, secret)` -- deterministic
-   derivation from state + revealed secret
+3. **Roll derivation**: `roll = hash(state_hash, secret)` mapped to the
+   requested range (e.g., 1–20 for a d20) — deterministic derivation from
+   state + revealed secret
 
 4. **FIFO consumption**: secrets are consumed in pool order (by ascending
    `seq_id`), never reused. Sequence numbers are localized per author.
@@ -129,7 +130,8 @@ Relevant tags:
    - [x] Secret types and commitment (`ClosedSecret`, `OpenSecret`,
      `createClosedSecret`, `openSecret`, `verifyOpenSecret`)
    - [x] Roll derivation (`deriveRoll`)
-   - [ ] Challenge / reveal mechanism
+    - [x] Challenge / reveal mechanism (`SecretPoolState`, `createPool`,
+      `nextChallenge`, `revealSecret`, `verifyReveal`)
 3. Build a browser-only demo client that plays a simple game
    (e.g., D&D ability check) over a Nostr test relay; the server is
    just a static file server, no backend logic

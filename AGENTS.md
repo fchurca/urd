@@ -4,6 +4,15 @@
 
 Use English only unless explicitly asked otherwise.
 
+## Source of Truth (Precedence Order)
+
+When resolving contradictions between files, this order decides:
+
+1. **README.md** — protocol spec, the authoritative design
+2. **AGENTS.md** — these agent conventions
+3. **Code (`src/`)** — implementation follows README
+4. **PITCH.md** — presentation, may simplify or omit details for brevity
+
 ## Project Structure
 
 ```

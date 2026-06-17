@@ -50,5 +50,6 @@ cryptographic primitives for trustless games. URD fills that gap.
 
 Proof-of-concept. Core types implemented: state chain (reverse-linked list
 with SHA-256 integrity), secret commitment (`ClosedSecret` / `OpenSecret`
-with per-author sequence numbers), and roll derivation. Protocol
-specification and Nostr event kinds being formalized.
+with per-author sequence numbers), roll derivation, and challenge/reveal
+mechanism with FIFO pool consumption and replenish. Protocol specification
+and Nostr event kinds being formalized.

@@ -56,26 +56,24 @@ export function verifyOpenSecret(open: OpenSecret): boolean {
   return fingerprint === open.fingerprint;
 }
 
-export function createGenesisState(data: string, timestamp?: number): GameState {
-  const ts = timestamp ?? Date.now();
+export function createGenesisState(data: string, timestamp: number): GameState {
   return {
-    hash: hashState(data, null, ts),
+    hash: hashState(data, null, timestamp),
     prevEventId: null,
     prevHash: null,
     data,
-    timestamp: ts,
+    timestamp,
   };
 }
 
-export function createNextState(prev: GameState, data: string, timestamp?: number): GameState {
-  const ts = timestamp ?? Date.now();
-  const hash = hashState(data, prev.hash, ts);
+export function createNextState(prev: GameState, data: string, timestamp: number): GameState {
+  const hash = hashState(data, prev.hash, timestamp);
   return {
     hash,
     prevEventId: prev.hash,
     prevHash: prev.hash,
     data,
-    timestamp: ts,
+    timestamp,
   };
 }
 
@@ -87,7 +85,7 @@ export function verifyChain(states: readonly GameState[]): boolean {
     if (i > 0) {
       const prev = states[i - 1]!;
       if (state.prevHash !== prev.hash) return false;
-      if (state.prevEventId !== prev.hash && state.prevEventId !== null) return false;
+      if (state.prevEventId !== prev.hash) return false;
     } else {
       if (state.prevHash !== null) return false;
       if (state.prevEventId !== null) return false;
@@ -103,4 +101,91 @@ export function deriveRoll(stateHash: string, secret: string, sides: number): nu
     .digest("hex");
   const val = parseInt(hash.slice(0, 8), 16);
   return (val % sides) + 1;
+}
+
+export interface SecretPoolState {
+  author: string;
+  commitments: ClosedSecret[];
+  consumedUpTo: number;
+}
+
+export function createPool(author: string, commitments: ClosedSecret[]): SecretPoolState {
+  const sorted = [...commitments].sort((a, b) => a.seqId - b.seqId);
+  for (const c of sorted) {
+    if (c.author !== author) throw new Error("Commitment author does not match pool author");
+  }
+  return { author, commitments: sorted, consumedUpTo: 0 };
+}
+
+export interface Challenge {
+  seqId: number;
+  fingerprint: string;
+}
+
+export function nextChallenge(pool: SecretPoolState): Challenge | null {
+  if (pool.consumedUpTo >= pool.commitments.length) return null;
+  const next = pool.commitments[pool.consumedUpTo]!;
+  return { seqId: next.seqId, fingerprint: next.fingerprint };
+}
+
+export interface Reveal {
+  seqId: number;
+  secret: string;
+  newFingerprint: string;
+  stateHash: string;
+  sides: number;
+}
+
+export interface RevealOutput {
+  roll: number;
+  updatedPool: SecretPoolState;
+}
+
+export function revealSecret(pool: SecretPoolState, reveal: Reveal): RevealOutput {
+  const challenge = nextChallenge(pool);
+  if (!challenge) throw new Error("No pending challenge");
+  if (reveal.seqId !== challenge.seqId) throw new Error("seqId does not match next challenge");
+
+  const fingerprint = createHash("sha256")
+    .update(pool.author)
+    .update(reveal.seqId.toString())
+    .update(reveal.secret)
+    .digest("hex");
+  if (fingerprint !== challenge.fingerprint) throw new Error("Secret does not match fingerprint");
+
+  const roll = deriveRoll(reveal.stateHash, reveal.secret, reveal.sides);
+
+  const lastSeqId = pool.commitments[pool.commitments.length - 1]!.seqId;
+  const newCommitment: ClosedSecret = {
+    author: pool.author,
+    seqId: lastSeqId + 1,
+    fingerprint: reveal.newFingerprint,
+  };
+
+  const updatedPool: SecretPoolState = {
+    author: pool.author,
+    commitments: [...pool.commitments, newCommitment],
+    consumedUpTo: pool.consumedUpTo + 1,
+  };
+
+  return { roll, updatedPool };
+}
+
+export function verifyReveal(
+  author: string,
+  expectedFingerprint: string,
+  seqId: number,
+  secret: string,
+  stateHash: string,
+  sides: number,
+  claimedRoll: number,
+): boolean {
+  const fingerprint = createHash("sha256")
+    .update(author)
+    .update(seqId.toString())
+    .update(secret)
+    .digest("hex");
+  if (fingerprint !== expectedFingerprint) return false;
+  const roll = deriveRoll(stateHash, secret, sides);
+  return roll === claimedRoll;
 }
