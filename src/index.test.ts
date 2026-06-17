@@ -931,4 +931,39 @@ describe("verifyGame", () => {
     equal(result.valid, false);
     ok(result.errors.some((e: string) => e.includes("no initial commitments")));
   });
+
+  it("fails when state referenced by reveal has no sides", () => {
+    const g1 = createGenesisState("start", 0);
+    const g2 = createNextState(g1, "roll", 1);
+    const closed = createClosedSecret("alice", 0, "s", "");
+    const roll = deriveRoll(g2.hash, "s", 6);
+    const reveals: Reveal[] = [{
+      seed: "",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: "a".repeat(64),
+      stateHash: g2.hash,
+      claimedRoll: roll,
+    }];
+    const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
+    equal(result.valid, false);
+    ok(result.errors.some((e: string) => e.includes("without sides")));
+  });
+
+  it("fails when state referenced by reveal has invalid sides", () => {
+    const g1 = createGenesisState("start", 0);
+    const g2 = createNextState(g1, "roll", 1, 1);
+    const closed = createClosedSecret("alice", 0, "s", "");
+    const reveals: Reveal[] = [{
+      seed: "",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: "a".repeat(64),
+      stateHash: g2.hash,
+      claimedRoll: 1,
+    }];
+    const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
+    equal(result.valid, false);
+    ok(result.errors.some((e: string) => e.includes("invalid sides")));
+  });
 });
