@@ -1,5 +1,5 @@
 import { describe, it } from "node:test";
-import { equal, ok, throws } from "node:assert/strict";
+import { doesNotThrow, equal, ok, throws } from "node:assert/strict";
 import type { GameState, ChallengeEvent, Reveal } from "./index.ts";
 import {
   createGenesisState,
@@ -41,37 +41,37 @@ describe("GameState chain", () => {
     const g1 = createGenesisState("a", 0);
     const g2 = createNextState(g1, "b", 1);
     const g3 = createNextState(g2, "c", 2);
-    ok(verifyChain([g1, g2, g3]));
+    doesNotThrow(() => verifyChain([g1, g2, g3]));
   });
 
   it("rejects a chain with a tampered hash", () => {
     const g1 = createGenesisState("a", 0);
     const g2 = createNextState(g1, "b", 1);
     const tampered: typeof g2 = { ...g2, data: "X" };
-    equal(verifyChain([g1, tampered]), false);
+    throws(() => verifyChain([g1, tampered]));
   });
 
   it("rejects a chain with tampered sides", () => {
     const g1 = createGenesisState("a", 0);
     const g2 = createNextState(g1, "b", 1, 20);
     const tampered: typeof g2 = { ...g2, sides: 6 };
-    equal(verifyChain([g1, tampered]), false);
+    throws(() => verifyChain([g1, tampered]));
   });
 
   it("rejects a chain with broken link", () => {
     const g1 = createGenesisState("a", 0);
     const g2 = createGenesisState("b", 1);
-    equal(verifyChain([g1, g2]), false);
+    throws(() => verifyChain([g1, g2]));
   });
 
   it("rejects a chain with a non-genesis state missing prevHash", () => {
     const g1 = createGenesisState("a", 0);
     const g2: GameState = { ...createNextState(g1, "b", 1), prevHash: null };
-    equal(verifyChain([g1, g2]), false);
+    throws(() => verifyChain([g1, g2]));
   });
 
   it("rejects an empty chain", () => {
-    equal(verifyChain([]), false);
+    throws(() => verifyChain([]));
   });
 });
 
@@ -162,7 +162,7 @@ describe("Secret pool", () => {
   it("verifies an open secret matches its fingerprint", () => {
     const closed = createClosedSecret("alice", 0, "my-secret", "g");
     const opened = openSecret(closed, "my-secret");
-    ok(verifyOpenSecret(opened));
+    doesNotThrow(() => verifyOpenSecret(opened));
   });
 
   it("throws when opening a closed secret with the wrong secret", () => {
@@ -179,7 +179,7 @@ describe("Secret pool", () => {
       fingerprint: closed.fingerprint,
       secret: "fake",
     };
-    equal(verifyOpenSecret(opened), false);
+    throws(() => verifyOpenSecret(opened));
   });
 
   it("rejects an open secret with mismatched seed", () => {
@@ -191,7 +191,7 @@ describe("Secret pool", () => {
       fingerprint: closed.fingerprint,
       secret: "s",
     };
-    equal(verifyOpenSecret(opened), false);
+    throws(() => verifyOpenSecret(opened));
   });
 });
 
@@ -446,7 +446,7 @@ describe("Challenge / reveal", () => {
       stateHash: g.hash,
       claimedRoll: deriveRoll(g.hash, "bob-secret", 20),
     };
-    ok(verifyReveal("bob", closed.fingerprint, reveal, [g]));
+    doesNotThrow(() => verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
 
   it("verifies a reveal with seed", () => {
@@ -460,7 +460,7 @@ describe("Challenge / reveal", () => {
       stateHash: g.hash,
       claimedRoll: deriveRoll(g.hash, "bob-secret", 20),
     };
-    ok(verifyReveal("bob", closed.fingerprint, reveal, [g]));
+    doesNotThrow(() => verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
 
   it("rejects verification with wrong claimed roll", () => {
@@ -474,7 +474,7 @@ describe("Challenge / reveal", () => {
       stateHash: g.hash,
       claimedRoll: 999,
     };
-    equal(verifyReveal("bob", closed.fingerprint, reveal, [g]), false);
+    throws(() => verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
 
   it("rejects verification with wrong secret", () => {
@@ -489,7 +489,7 @@ describe("Challenge / reveal", () => {
       stateHash: g.hash,
       claimedRoll: goodRoll,
     };
-    equal(verifyReveal("bob", closed.fingerprint, reveal, [g]), false);
+    throws(() => verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
 
   it("rejects verification with invalid newFingerprint", () => {
@@ -504,7 +504,7 @@ describe("Challenge / reveal", () => {
       stateHash: g.hash,
       claimedRoll: goodRoll,
     };
-    equal(verifyReveal("bob", closed.fingerprint, reveal, [g]), false);
+    throws(() => verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
 });
 
@@ -585,21 +585,21 @@ describe("Pool fingerprint verification", () => {
     ];
     const pool = reconstructPool("alice", [s0, s1], reveals, [g]);
     const opened = [openSecret(s0, "s0"), openSecret(s1, "s1")];
-    ok(verifyPoolFingerprints(pool, opened));
+    doesNotThrow(() => verifyPoolFingerprints(pool, opened));
   });
 
   it("rejects when an opened secret is missing from the pool", () => {
     const s0 = createClosedSecret("alice", 0, "s0", "");
     const pool = createPool("alice", [s0]);
     const unknown = { seed: "", author: "alice", seqId: 99, fingerprint: "x".repeat(64), secret: "y" };
-    equal(verifyPoolFingerprints(pool, [unknown]), false);
+    throws(() => verifyPoolFingerprints(pool, [unknown]));
   });
 
   it("rejects when an opened secret has a wrong secret", () => {
     const s0 = createClosedSecret("alice", 0, "s0", "");
     const pool = createPool("alice", [s0]);
     const opened = { seed: "", author: "alice", seqId: 0, fingerprint: s0.fingerprint, secret: "wrong" };
-    equal(verifyPoolFingerprints(pool, [opened]), false);
+    throws(() => verifyPoolFingerprints(pool, [opened]));
   });
 
   it("rejects opened secrets for unconsumed replenished commitments", () => {
@@ -619,7 +619,7 @@ describe("Pool fingerprint verification", () => {
     pool = result.updatedPool;
     equal(pool.consumedCount, 1);
     const opened = openSecret(replenished, "r");
-    equal(verifyPoolFingerprints(pool, [opened]), false);
+    throws(() => verifyPoolFingerprints(pool, [opened]));
   });
 });
 
@@ -633,7 +633,7 @@ describe("Challenge verification", () => {
       seqId: 0,
       fingerprint: pool.commitments[0]!.fingerprint,
     };
-    ok(verifyChallenge(pool, challenge));
+    doesNotThrow(() => verifyChallenge(pool, challenge));
   });
 
   it("rejects a challenge with wrong fingerprint", () => {
@@ -645,7 +645,7 @@ describe("Challenge verification", () => {
       seqId: 0,
       fingerprint: "x".repeat(64),
     };
-    equal(verifyChallenge(pool, challenge), false);
+    throws(() => verifyChallenge(pool, challenge));
   });
 
   it("rejects a challenge with wrong seed", () => {
@@ -658,7 +658,7 @@ describe("Challenge verification", () => {
       seqId: 0,
       fingerprint: s.fingerprint,
     };
-    equal(verifyChallenge(pool, challenge), false);
+    throws(() => verifyChallenge(pool, challenge));
   });
 
   it("rejects a challenge against a depleted pool", () => {
@@ -680,7 +680,7 @@ describe("Challenge verification", () => {
       seqId: 0,
       fingerprint: pool.commitments[0]!.fingerprint,
     };
-    equal(verifyChallenge(updatedPool, challenge), false);
+    throws(() => verifyChallenge(updatedPool, challenge));
   });
 });
 
@@ -708,7 +708,7 @@ describe("Security properties", () => {
     const g2 = createNextState(g1, "move-1", 1);
     const g3 = createNextState(g2, "move-2", 2);
     const tampered: typeof g2 = { ...g2, data: "CHEAT" };
-    equal(verifyChain([g1, tampered, g3]), false);
+    throws(() => verifyChain([g1, tampered, g3]));
   });
 
   it("a reveal with correct secret passes verification", () => {
@@ -722,7 +722,7 @@ describe("Security properties", () => {
       stateHash: g.hash,
       claimedRoll: deriveRoll(g.hash, "secret", 6),
     };
-    ok(verifyReveal("alice", closed.fingerprint, reveal, [g]));
+    doesNotThrow(() => verifyReveal("alice", closed.fingerprint, reveal, [g]));
   });
 
   it("replay of same reveal on different state yields different roll and fails original verification", () => {
@@ -741,8 +741,8 @@ describe("Security properties", () => {
       newFingerprint: "a".repeat(64),
       stateHash: gA.hash, claimedRoll: rollB,
     };
-    equal(verifyReveal("bob", closed.fingerprint, revealA, [gA]), true);
-    equal(verifyReveal("bob", closed.fingerprint, revealB, [gA]), false);
+    doesNotThrow(() => verifyReveal("bob", closed.fingerprint, revealA, [gA]));
+    throws(() => verifyReveal("bob", closed.fingerprint, revealB, [gA]));
   });
 
   it("roll distribution is uniform (no modulo bias on small sides)", () => {

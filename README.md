@@ -122,6 +122,66 @@ of the reveal event.
   seconds or hours — microsecond timing leaks are irrelevant to the threat
   model
 
+### Verification Reference
+
+All verifier functions in the library throw distinct errors on rejection. The
+table below documents every rejection reason across the API.
+
+#### `verifyChain(states)`
+
+| Error message | When |
+|---|---|
+| `Chain is empty` | `states` array has length 0 |
+| `State abc... hash is invalid` | A state's `hash` field does not match `hashState(data, prevHash, timestamp, sides)` |
+| `chain broken at abc...: prevHash does not match previous state` | A non-genesis state's `prevHash` does not reference the previous state's hash |
+| `Genesis state abc... has prevHash, expected null` | The first state has a non-null `prevHash` |
+
+#### `verifyOpenSecret(open)`
+
+| Error message | When |
+|---|---|
+| `Opened secret does not match fingerprint` | `hash(seed + author + seq_id + secret)` does not equal `open.fingerprint` |
+
+#### `verifyReveal(author, expectedFingerprint, reveal, states)`
+
+| Error message | When |
+|---|---|
+| `newFingerprint must be a 64-char hex string` | `reveal.newFingerprint` is not valid hex |
+| `Reveal fingerprint does not match commitment` | `hash(seed + author + seq_id + secret)` does not match the expected fingerprint |
+| (propagated from `lookupSides`) | State not found, missing sides, or invalid sides in the referenced state |
+| `Claimed roll does not match computed roll` | `deriveRoll(stateHash, secret, sides) !== reveal.claimedRoll` |
+
+#### `verifyChallenge(pool, challenge)`
+
+| Error message | When |
+|---|---|
+| `No pending challenge for pool` | All commitments have been consumed |
+| `Challenge target author does not match pool author` | `challenge.targetAuthor !== pool.author` |
+| `Challenge seed does not match next commitment` | Seed does not match the next unconsumed commitment |
+| `Challenge seqId does not match next commitment` | `challenge.seqId` does not match the next available `seqId` |
+| `Challenge fingerprint does not match next commitment` | `challenge.fingerprint` does not match the next commitment's fingerprint |
+
+#### `verifyPoolFingerprints(pool, opened)`
+
+| Error message | When |
+|---|---|
+| `Opened secret (author=..., seqId=...) not found in pool commitments` | An opened secret does not correspond to any consumed commitment |
+| (propagated from `verifyOpenSecret`) | An opened secret's fingerprint does not match its revealed secret |
+
+#### `verifyGame(states, initialCommitments, reveals, openedSecrets, expectedSides?)`
+
+| Error message | When |
+|---|---|
+| (propagated from `verifyChain`) | Chain validation fails (short-circuits, no further checks) |
+| `Author ${author} has reveals but no initial commitments` | A reveal exists for an author not in `initialCommitments` |
+| `Pool reconstruction failed for ${author}: ${msg}` | `reconstructPool` / `revealSecret` threw (e.g., wrong secret, bad seqId, invalid `newFingerprint`) |
+| `Missing opened secrets for ${author}: have ${have}, need ${need}` | Fewer opened secrets than consumed commitments |
+| `Pool fingerprint mismatch for ${author}: ${msg}` | `verifyPoolFingerprints` threw (commitment not found or secret mismatch) |
+| `Reveal seqId ${n} by ${author} references unknown state ${hash}...` | `reveal.stateHash` is not in the verified chain |
+| `Reveal seqId ${n} by ${author} references state without sides` | The state exists but has no `sides` field |
+| `Reveal seqId ${n} by ${author} has invalid sides: ${value}` | The state's `sides` is not a finite integer >= 2 |
+| `Reveal seqId ${n} by ${author} has sides ${sides}, expected ${expected}` | The state's `sides` does not match `expectedSides` |
+
 ### Design Decisions
 
 - **Witness relays**: the protocol is fully peer-to-peer by default. Optional
