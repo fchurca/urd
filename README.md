@@ -128,9 +128,10 @@ A complete round — create a pool, challenge, reveal, and verify:
 import {
   createPool, createClosedSecret, createOpenSecret,
   createGenesisState, deriveRoll, nextChallenge,
-  processReveal, verifyReveal, verifyPoolFingerprints,
+  processReveal, verifyReveal, verifyChallenge,
+  verifyPoolFingerprints,
 } from "urd";
-import type { Reveal } from "urd";
+import type { Reveal, ChallengeEvent } from "urd";
 
 // Player A commits to a secret pool
 const pool = createPool("alice", [
@@ -141,7 +142,7 @@ const pool = createPool("alice", [
 const state = createGenesisState("start", 1001, 20);
 
 // Challenger picks the oldest unused fingerprint
-const challenge = nextChallenge(pool);
+const challenge = nextChallenge(pool)!;
 
 // Player A reveals the secret, gets a d20 roll and an updated pool
 const roll = deriveRoll(state.hash, "my-secret", 20);
@@ -156,6 +157,11 @@ const reveal: Reveal = {
 const { updatedPool } = processReveal(pool, reveal, [state]);
 
 // Any observer can verify after the fact
+verifyChallenge(pool, {
+  challenger: "bob",
+  targetAuthor: "alice",
+  ...challenge,
+} satisfies ChallengeEvent);
 verifyReveal("alice", pool.commitments[0]!.fingerprint, reveal, [state]);
 verifyPoolFingerprints(updatedPool, [createOpenSecret(pool.commitments[0]!, "my-secret")]);
 ```
@@ -203,11 +209,25 @@ table below documents every rejection reason across the API.
 | `newFingerprint must be a 64-char hex string` | `reveal.newFingerprint` is not valid hex |
 | `Reveal fingerprint does not match commitment` | `hash(seed + author + seq_id + secret)` does not match the expected fingerprint |
 | (propagated from `lookupSides`) | State not found, missing sides, or invalid sides in the referenced state |
+| (propagated from `deriveRoll`) | `sides` exceeds 2^48 (the rejection sampling 48-bit limit) |
 | `Claimed roll does not match computed roll` | `deriveRoll(stateHash, secret, sides) !== reveal.claimedRoll` |
 
 > `expectedFingerprint` is the `fingerprint` field from the `ClosedSecret` (the commitment published at game start). The caller extracts this from the commitment that corresponds to this reveal's `seqId`.
 
 > **`verifyReveal` is read-only.** The sibling function `processReveal` performs the same checks but also returns an updated pool (consumes the commitment, appends a new one). Use `processReveal` during gameplay; use `verifyReveal` for post-hoc audit.
+
+#### `processReveal(pool, reveal, states)`
+
+| Error message | When |
+|---|---|
+| `newFingerprint must be a 64-char hex string` | `reveal.newFingerprint` is not valid hex |
+| `No pending challenge` | All commitments have been consumed (pool depleted) |
+| `seqId does not match next challenge` | `reveal.seqId` does not match the next unconsumed commitment's seqId |
+| `Seed does not match challenge` | `reveal.seed` does not match the next commitment's seed |
+| `Secret does not match fingerprint` | `hash(seed + author + seq_id + secret)` does not match the committed fingerprint |
+| (propagated from `lookupSides`) | State not found, missing sides, or invalid sides in the referenced state |
+| (propagated from `deriveRoll`) | `sides` exceeds 2^48 (the rejection sampling 48-bit limit) |
+| `Claimed roll does not match computed roll` | `deriveRoll(stateHash, secret, sides) !== reveal.claimedRoll` |
 
 #### `verifyChallenge(pool, challenge)`
 
@@ -223,6 +243,7 @@ table below documents every rejection reason across the API.
 
 | Error message | When |
 |---|---|
+| `Expected ${pool.consumedCount} opened secrets, got ${opened.length}` | Wrong number of opened secrets for the consumed commitments |
 | `Opened secret (author=..., seqId=...) not found in pool commitments` | An opened secret does not correspond to any consumed commitment |
 | (propagated from `verifyOpenSecret`) | An opened secret's fingerprint does not match its revealed secret |
 

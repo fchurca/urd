@@ -476,8 +476,8 @@ export function verifyPoolFingerprints(pool: SecretPoolState, opened: OpenSecret
   for (const open of opened) {
     let found = false;
     for (let i = 0; i < matched.length; i++) {
-      if (matched[i]!) continue;
-      const c = pool.commitments[i]!;
+      if (at(matched, i)) continue;
+      const c = at(pool.commitments, i);
       if (c.author === open.author && c.seqId === open.seqId && c.seed === open.seed) {
         matched[i] = true;
         found = true;
