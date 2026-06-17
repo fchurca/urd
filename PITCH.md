@@ -2,8 +2,8 @@
 
 ## 30-Second Pitch
 
-A cryptographic protocol that lets strangers roll dice over Nostr without
-trusting each other — no server, no blockchain, no "trust me bro." Each
+A cryptographic protocol that lets players roll dice over Nostr with publicly
+verifiable commitments — no server, no blockchain, no "trust me bro." Each
 player pre-commits to hashed secrets. To roll, a peer challenges you to
 reveal the next secret in line. The result is `hash(game_state, secret)`,
 deterministic and publicly verifiable. Fully async, shared-nothing,

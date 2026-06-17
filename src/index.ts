@@ -26,6 +26,13 @@ export interface OpenSecret {
   secret: string;
 }
 
+function taggedHash(tag: string, ...parts: string[]): string {
+  const tagHash = createHash("sha256").update(tag).digest();
+  const h = createHash("sha256").update(tagHash).update(tagHash);
+  for (const part of parts) h.update(part);
+  return h.digest("hex");
+}
+
 function at<T>(arr: readonly T[], index: number): T {
   const val = arr[index];
   if (val === undefined) throw new Error(`Index ${index} out of bounds`);
@@ -33,12 +40,7 @@ function at<T>(arr: readonly T[], index: number): T {
 }
 
 function hashState(data: string, prevHash: string | null, timestamp: number, sides?: number): string {
-  const h = createHash("sha256")
-    .update(data)
-    .update(prevHash ?? "\0")
-    .update(timestamp.toString());
-  if (sides !== undefined) h.update(sides.toString());
-  return h.digest("hex");
+  return taggedHash("urd-state/v1", data, prevHash ?? "\0", timestamp.toString(), ...(sides !== undefined ? [sides.toString()] : []));
 }
 
 /**
@@ -53,12 +55,7 @@ function hashState(data: string, prevHash: string | null, timestamp: number, sid
  */
 export function createClosedSecret(author: string, seqId: number, secret: string, seed: string): ClosedSecret {
   if (!Number.isFinite(seqId) || !Number.isInteger(seqId) || seqId < 0) throw new Error("seqId must be a non-negative integer");
-  const fingerprint = createHash("sha256")
-    .update(seed)
-    .update(author)
-    .update(seqId.toString())
-    .update(secret)
-    .digest("hex");
+  const fingerprint = taggedHash("urd-commit/v1", seed, author, seqId.toString(), secret);
   return { seed, author, seqId, fingerprint };
 }
 
@@ -71,12 +68,7 @@ export function createClosedSecret(author: string, seqId: number, secret: string
  * @throws "Secret does not match fingerprint" if the secret does not hash to the committed fingerprint
  */
 export function createOpenSecret(closed: ClosedSecret, secret: string): OpenSecret {
-  const fingerprint = createHash("sha256")
-    .update(closed.seed)
-    .update(closed.author)
-    .update(closed.seqId.toString())
-    .update(secret)
-    .digest("hex");
+  const fingerprint = taggedHash("urd-commit/v1", closed.seed, closed.author, closed.seqId.toString(), secret);
   if (fingerprint !== closed.fingerprint) throw new Error("Secret does not match fingerprint");
   return {
     seed: closed.seed,
@@ -92,12 +84,7 @@ export function createOpenSecret(closed: ClosedSecret, secret: string): OpenSecr
  * Read-only — see README for rejection reasons.
  */
 export function verifyOpenSecret(open: OpenSecret): void {
-  const fingerprint = createHash("sha256")
-    .update(open.seed)
-    .update(open.author)
-    .update(open.seqId.toString())
-    .update(open.secret)
-    .digest("hex");
+  const fingerprint = taggedHash("urd-commit/v1", open.seed, open.author, open.seqId.toString(), open.secret);
   if (fingerprint !== open.fingerprint) throw new Error("Secret does not match fingerprint");
 }
 
@@ -170,10 +157,7 @@ export function deriveRoll(stateHash: string, secret: string, sides: number): nu
   const maxVal = 2 ** 48;
   if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2 || sides > maxVal) throw new Error("Roll sides must be a finite integer >= 2 and ≤ 2^48");
   const maxAcceptable = maxVal - (maxVal % sides);
-  let hash = createHash("sha256")
-    .update(stateHash)
-    .update(secret)
-    .digest("hex");
+  let hash = taggedHash("urd-roll/v1", stateHash, secret);
   let offset = 0;
   // Rejection sampling against 48-bit values eliminates modulo bias.
   // If val >= maxAcceptable the value falls outside the fair range
@@ -284,12 +268,7 @@ export function processReveal(pool: SecretPoolState, reveal: Reveal, states: rea
   if (reveal.seqId !== challenge.seqId) throw new Error("seqId does not match next challenge");
   if (reveal.seed !== challenge.seed) throw new Error("Seed does not match challenge");
 
-  const fingerprint = createHash("sha256")
-    .update(reveal.seed)
-    .update(pool.author)
-    .update(reveal.seqId.toString())
-    .update(reveal.secret)
-    .digest("hex");
+  const fingerprint = taggedHash("urd-commit/v1", reveal.seed, pool.author, reveal.seqId.toString(), reveal.secret);
   if (fingerprint !== challenge.fingerprint) throw new Error("Secret does not match fingerprint");
 
   const sides = lookupSides(states, reveal.stateHash);
@@ -326,12 +305,7 @@ export function verifyReveal(
   states: readonly GameState[],
 ): void {
   if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) throw new Error("newFingerprint must be a 64-char hex string");
-  const fingerprint = createHash("sha256")
-    .update(reveal.seed)
-    .update(author)
-    .update(reveal.seqId.toString())
-    .update(reveal.secret)
-    .digest("hex");
+  const fingerprint = taggedHash("urd-commit/v1", reveal.seed, author, reveal.seqId.toString(), reveal.secret);
   if (fingerprint !== expectedFingerprint) throw new Error("Reveal fingerprint does not match commitment");
   const sides = lookupSides(states, reveal.stateHash);
   const roll = deriveRoll(reveal.stateHash, reveal.secret, sides);

@@ -27,7 +27,7 @@ games (dice rolls, card draws, etc.) over Nostr, with these properties:
 - **Shared-nothing**: no central server, no specialized relay, no blockchain
 - **Deterministic and verifiable**: given the game state and committed secrets,
   anyone can replay and verify every result
-- **Farm-resistant**: a player cannot choose whether to keep or discard a result
+- **Farm-resistant**: a player cannot choose which secret to reveal; abort (forfeit) is detectable
 - **Identity via pubkey**: uses existing Nostr keys for signing and authentication
 
 At a physical table, trust in randomness is solved by sharing custody: you
@@ -102,7 +102,8 @@ If A does not reveal within a reasonable time: forfeit (inactivity).
 is invalid, the game is unrecoverable and all subsequent checks are skipped.
 
 **Hidden information / self-challenge**: the same challenge-reveal mechanism
-serves private draws (e.g., a hand of cards). A player can **self-challenge**
+serves independent private random values (e.g., a private draw from one's own
+pool). A player can **self-challenge**
  — call `nextChallenge` on their own commitment pool, then `processReveal`
 with their own secret to consume the fingerprint privately (returns an updated pool). The derived
 result stays hidden until the player later publishes it (e.g., playing the
@@ -139,7 +140,7 @@ import type { Reveal, ChallengeEvent } from "urd";
 
 // Player A commits to a secret pool
 const pool = createPool("alice", [
-  createClosedSecret("alice", 0, "my-secret", "game-1"),
+  createClosedSecret("alice", 0, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv", "game-1"),
 ]);
 
 // Game state is established
@@ -149,12 +150,12 @@ const state = createGenesisState("start", 1001, 20);
 const challenge = nextChallenge(pool)!;
 
 // Player A reveals the secret, gets a d20 roll and an updated pool
-const roll = deriveRoll(state.hash, "my-secret", 20);
+const roll = deriveRoll(state.hash, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv", 20);
 const reveal: Reveal = {
   seed: "game-1",
   seqId: 0,
-  secret: "my-secret",
-  newFingerprint: createClosedSecret("alice", 1, "next-secret", "game-1").fingerprint,
+  secret: "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv",
+  newFingerprint: createClosedSecret("alice", 1, "k1l2m3n4o5p6q7r8s9t0", "game-1").fingerprint,
   stateHash: state.hash,
   claimedRoll: roll,
 };
@@ -167,13 +168,15 @@ verifyChallenge(pool, {
   ...challenge,
 } satisfies ChallengeEvent);
 verifyReveal("alice", pool.commitments[0]!.fingerprint, reveal, [state]);
-verifyPoolFingerprints(updatedPool, [createOpenSecret(pool.commitments[0]!, "my-secret")]);
+verifyPoolFingerprints(updatedPool, [createOpenSecret(pool.commitments[0]!, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv")]);
 ```
 
 ### Security Properties
 
 - **No farming**: the fingerprint determines which secret to use; you cannot
-  choose which secret to reveal or discard an unfavorable result
+  choose which secret to reveal. The roller computes the roll before publishing
+  and can choose to abort (forfeit) instead of revealing — abort is detectable
+  and attributable
 - **No prediction**: the game state is unknown until published, and the secret
   is unknown until revealed
 - **One-shot commitment**: the fingerprint pool is published before any game
@@ -185,6 +188,10 @@ verifyPoolFingerprints(updatedPool, [createOpenSecret(pool.commitments[0]!, "my-
   The protocol targets turn-based games over Nostr where each round takes
   seconds or hours — microsecond timing leaks are irrelevant to the threat
   model
+- **Verifiable in a shared log**: URD assumes a shared event log (e.g., a Nostr
+  relay) visible to all participants. The protocol does not provide byzantine
+  fault-tolerant consensus; fork detection requires relay-level deduplication or
+  social coordination between participants.
 
 ### Verification Reference
 
@@ -270,6 +277,15 @@ table below documents every rejection reason across the API.
 
 ### Design Decisions
 
+- **Domain-separated hashing**: all hashes use BIP-340-style tagged SHA-256.
+  Each record type has a distinct tag: `urd-commit/v1` for commitment
+  fingerprints, `urd-state/v1` for game state hashes, and `urd-roll/v1` for
+  roll derivation. This prevents cross-domain collision attacks.
+- **Secret entropy**: secrets must have sufficient entropy to prevent
+  brute-force prediction of the fingerprint. The library does not enforce a
+  minimum entropy — it is the caller's responsibility to generate strong
+  secrets (at least 128 bits, e.g., 32 hex characters from a CSPRNG). Never
+  use guessable values like dictionary words or short strings.
 - **Witness relays**: the protocol is fully peer-to-peer by default. Optional
   witness relays can accelerate challenge notification, but the protocol does
   not depend on them.
