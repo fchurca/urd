@@ -83,11 +83,28 @@ If A does not reveal within a reasonable time: forfeit (inactivity).
 **Note:** verification short-circuits on chain failure — if the state chain
 is invalid, the game is unrecoverable and all subsequent checks are skipped.
 
-**Hidden information**: the same challenge-reveal mechanism serves private
-draws (e.g., a hand of cards). A player can ask a peer to reveal a secret
-and consume it for their own hidden state. The derived roll is public, but
-its mapping to game state (which card was drawn, etc.) stays known only to
-the player until later revealed. No extra encryption is needed.
+**Hidden information / self-challenge**: the same challenge-reveal mechanism
+serves private draws (e.g., a hand of cards). A player can **self-challenge**
+— call `nextChallenge` on their own commitment pool, then `revealSecret`
+with their own secret to consume the fingerprint privately. The derived
+result stays hidden until the player later publishes it (e.g., playing the
+drawn card).
+
+Alternatively, a player can ask a peer to reveal a secret for the same
+purpose. In either case, the protocol does not care who initiated the
+challenge — `verifyChallenge` accepts any challenger, and `revealSecret`
+accepts any revealer as long as the secret matches the fingerprint.
+
+**Flow for a private draw:**
+1. Player calls `nextChallenge(pool)` — the pool can be their own or a peer's
+2. Player (or peer) calls `revealSecret(pool, challenge, secret, ...)` to
+   consume the commitment and get a deterministic roll
+3. The roll is not published yet — the player keeps it in their private state
+4. When the hidden information must be revealed (e.g., playing the card),
+   the player publishes the roll and the reveal details for verification
+
+No extra encryption is needed — hiding is achieved by delaying publication
+of the reveal event.
 
 ### Security Properties
 

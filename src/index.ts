@@ -38,7 +38,7 @@ function hashState(data: string, prevHash: string | null, timestamp: number, sid
   return h.digest("hex");
 }
 
-export function createClosedSecret(author: string, seqId: number, secret: string, seed = ""): ClosedSecret {
+export function createClosedSecret(author: string, seqId: number, secret: string, seed: string): ClosedSecret {
   const fingerprint = createHash("sha256")
     .update(seed)
     .update(author)
