@@ -178,8 +178,6 @@ table below documents every rejection reason across the API.
 | `Missing opened secrets for ${author}: have ${have}, need ${need}` | Fewer opened secrets than consumed commitments |
 | `Pool fingerprint mismatch for ${author}: ${msg}` | `verifyPoolFingerprints` threw (commitment not found or secret mismatch) |
 | `Reveal seqId ${n} by ${author} references unknown state ${hash}...` | `reveal.stateHash` is not in the verified chain |
-| `Reveal seqId ${n} by ${author} references state without sides` | The state exists but has no `sides` field |
-| `Reveal seqId ${n} by ${author} has invalid sides: ${value}` | The state's `sides` is not a finite integer >= 2 |
 | `Reveal seqId ${n} by ${author} has sides ${sides}, expected ${expected}` | The state's `sides` does not match `expectedSides` |
 
 ### Design Decisions

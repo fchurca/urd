@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { doesNotThrow, equal, ok, throws } from "node:assert/strict";
-import type { GameState, ChallengeEvent, Reveal } from "./index.ts";
+import type { ClosedSecret, GameState, ChallengeEvent, Reveal, OpenSecret } from "./index.ts";
 import {
   createGenesisState,
   createNextState,
@@ -126,7 +126,7 @@ describe("Secret pool", () => {
     ok(typeof s.fingerprint === "string" && s.fingerprint.length === 64);
   });
 
-  it("defaults seed to empty string", () => {
+  it("creates a closed secret with explicit empty seed", () => {
     const s = createClosedSecret("alice", 0, "secret", "");
     equal(s.seed, "");
   });
@@ -947,7 +947,7 @@ describe("verifyGame", () => {
     }];
     const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
     equal(result.valid, false);
-    ok(result.errors.some((e: string) => e.includes("without sides")));
+    ok(result.errors.some((e: string) => e.includes("does not define sides")));
   });
 
   it("fails when state referenced by reveal has invalid sides", () => {
@@ -964,6 +964,6 @@ describe("verifyGame", () => {
     }];
     const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
     equal(result.valid, false);
-    ok(result.errors.some((e: string) => e.includes("invalid sides")));
+    ok(result.errors.some((e: string) => e.includes("must be a finite integer >= 2")));
   });
 });

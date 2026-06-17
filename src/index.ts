@@ -279,6 +279,7 @@ export function verifyGame(
     const authorReveals = reveals[author] ?? [];
     const authorOpened = openedSecrets[author] ?? [];
 
+    let poolReconstructFailed = false;
     try {
       const pool = reconstructPool(author, [...commitments], [...authorReveals], states);
       if (authorOpened.length < pool.consumedCount) {
@@ -291,6 +292,7 @@ export function verifyGame(
         }
       }
     } catch (e) {
+      poolReconstructFailed = true;
       errors.push(`Pool reconstruction failed for ${author}: ${(e as Error).message}`);
     }
 
@@ -298,12 +300,8 @@ export function verifyGame(
       const state = findStateInChain(states, reveal.stateHash);
       if (!state) {
         errors.push(`Reveal seqId ${reveal.seqId} by ${author} references unknown state ${reveal.stateHash.slice(0, 8)}...`);
-      } else if (expectedSides !== undefined) {
-        if (state.sides === undefined) {
-          errors.push(`Reveal seqId ${reveal.seqId} by ${author} references state without sides`);
-        } else if (!Number.isFinite(state.sides) || !Number.isInteger(state.sides) || state.sides < 2) {
-          errors.push(`Reveal seqId ${reveal.seqId} by ${author} has invalid sides: ${state.sides}`);
-        } else if (state.sides !== expectedSides) {
+      } else if (expectedSides !== undefined && !poolReconstructFailed) {
+        if (state.sides !== expectedSides) {
           errors.push(`Reveal seqId ${reveal.seqId} by ${author} has sides ${state.sides}, expected ${expectedSides}`);
         }
       }
