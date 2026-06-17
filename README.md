@@ -6,6 +6,10 @@ A Verifiable Randomness Protocol for Decentralized "Play-by-Nostr" Games
 challenge/reveal mechanism implemented. Nostr bindings and demo client are
 planned but not yet built.
 
+**URD** (pronounced "urd") shares its name with [Urðr](https://en.wikipedia.org/wiki/Ur%C3%B0r),
+one of the Norns who weave the threads of fate in Norse mythology — fitting for a protocol
+that derives deterministic outcomes from committed secrets.
+
 ## Problem
 
 In peer-to-peer multiplayer games without a central server (e.g., play-by-mail
