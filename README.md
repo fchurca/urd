@@ -38,7 +38,7 @@ result is dealt using the public game state.
 
 1. **Pre-committed secret pool**: each player publishes an ordered list of
    fingerprints at game start. Each commitment is a closed secret published
-   as `(author, seq_id, fingerprint)` where `fingerprint = hash(author + seq_id + secret)`.
+   as `(author, seq_id, seed, fingerprint)` where `fingerprint = hash(seed + author + seq_id + secret)`.
    The initial pool can be as small as one fingerprint; new fingerprints are
    appended during each reveal (with incremented `seq_id`).
 
@@ -73,12 +73,15 @@ Phase 2 — Reveal: Player A publishes kind:XXXXX "reveal" with:
 - derived result: `hash(state, secret)` mapped to the requested range
 
 Anyone verifies:
-- `hash(author + seq_id + secret) == fingerprint` (initial commitment holds)
+- `hash(seed + author + seq_id + secret) == fingerprint` (initial commitment holds)
 - `hash(state, secret)` produces the claimed result
 - new fingerprint is appended at end of A's pool with correct `seq_id`
 - the referenced state hash exists in the verified game state chain
 
 If A does not reveal within a reasonable time: forfeit (inactivity).
+
+**Note:** verification short-circuits on chain failure — if the state chain
+is invalid, the game is unrecoverable and all subsequent checks are skipped.
 
 **Hidden information**: the same challenge-reveal mechanism serves private
 draws (e.g., a hand of cards). A player can ask a peer to reveal a secret
@@ -97,6 +100,10 @@ the player until later revealed. No extra encryption is needed.
   Fingerprints can be appended for later rolls
 - **Public verifiability**: any observer with the event chain can replay and
   verify every result
+- **Timing-safe comparisons**: hash comparisons use string equality (`===`).
+  The protocol targets turn-based games over Nostr where each round takes
+  seconds or hours — microsecond timing leaks are irrelevant to the threat
+  model
 
 ### Design Decisions
 
@@ -134,7 +141,7 @@ Proposed new event kinds (e.g., 31000-31099 for games):
 Relevant tags:
 - `e`: parent event reference (state chain)
 - `p`: participant pubkeys
-- `fingerprint`: SHA256 hash of `(author + seq_id + secret)` (hex)
+- `fingerprint`: SHA256 hash of `(seed + author + seq_id + secret)` (hex)
 - `seq_id`: sequence number within an author's secret pool (integer)
 - `roll`: dice type and result (e.g., "d20:15")
 

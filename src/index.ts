@@ -5,19 +5,28 @@ export interface GameState {
   prevHash: string | null;
   data: string;
   timestamp: number;
+  sides?: number;
 }
 
 export interface ClosedSecret {
+  seed: string;
   author: string;
   seqId: number;
   fingerprint: string;
 }
 
 export interface OpenSecret {
+  seed: string;
   author: string;
   seqId: number;
   fingerprint: string;
   secret: string;
+}
+
+function at<T>(arr: readonly T[], index: number): T {
+  const val = arr[index];
+  if (val === undefined) throw new Error(`Index ${index} out of bounds`);
+  return val;
 }
 
 function hashState(data: string, prevHash: string | null, timestamp: number): string {
@@ -28,23 +37,26 @@ function hashState(data: string, prevHash: string | null, timestamp: number): st
     .digest("hex");
 }
 
-export function createClosedSecret(author: string, seqId: number, secret: string): ClosedSecret {
+export function createClosedSecret(author: string, seqId: number, secret: string, seed = ""): ClosedSecret {
   const fingerprint = createHash("sha256")
+    .update(seed)
     .update(author)
     .update(seqId.toString())
     .update(secret)
     .digest("hex");
-  return { author, seqId, fingerprint };
+  return { seed, author, seqId, fingerprint };
 }
 
 export function openSecret(closed: ClosedSecret, secret: string): OpenSecret {
   const fingerprint = createHash("sha256")
+    .update(closed.seed)
     .update(closed.author)
     .update(closed.seqId.toString())
     .update(secret)
     .digest("hex");
   if (fingerprint !== closed.fingerprint) throw new Error("Secret does not match fingerprint");
   return {
+    seed: closed.seed,
     author: closed.author,
     seqId: closed.seqId,
     fingerprint: closed.fingerprint,
@@ -54,6 +66,7 @@ export function openSecret(closed: ClosedSecret, secret: string): OpenSecret {
 
 export function verifyOpenSecret(open: OpenSecret): boolean {
   const fingerprint = createHash("sha256")
+    .update(open.seed)
     .update(open.author)
     .update(open.seqId.toString())
     .update(open.secret)
@@ -61,32 +74,35 @@ export function verifyOpenSecret(open: OpenSecret): boolean {
   return fingerprint === open.fingerprint;
 }
 
-export function createGenesisState(data: string, timestamp: number): GameState {
+export function createGenesisState(data: string, timestamp: number, sides?: number): GameState {
   return {
     hash: hashState(data, null, timestamp),
     prevHash: null,
     data,
     timestamp,
+    sides,
   };
 }
 
-export function createNextState(prev: GameState, data: string, timestamp: number): GameState {
+export function createNextState(prev: GameState, data: string, timestamp: number, sides?: number): GameState {
   const hash = hashState(data, prev.hash, timestamp);
   return {
     hash,
     prevHash: prev.hash,
     data,
     timestamp,
+    sides,
   };
 }
 
 export function verifyChain(states: readonly GameState[]): boolean {
+  if (states.length === 0) return false;
   for (let i = 0; i < states.length; i++) {
-    const state = states[i]!;
+    const state = at(states, i);
     const expectedHash = hashState(state.data, state.prevHash, state.timestamp);
     if (state.hash !== expectedHash) return false;
     if (i > 0) {
-      const prev = states[i - 1]!;
+      const prev = at(states, i - 1);
       if (state.prevHash !== prev.hash) return false;
     } else {
       if (state.prevHash !== null) return false;
@@ -113,34 +129,39 @@ export function deriveRoll(stateHash: string, secret: string, sides: number): nu
 export interface SecretPoolState {
   author: string;
   commitments: ClosedSecret[];
-  consumedUpTo: number;
+  consumedCount: number;
 }
 
 export function createPool(author: string, commitments: ClosedSecret[]): SecretPoolState {
   const sorted = [...commitments].sort((a, b) => a.seqId - b.seqId);
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i]!.seqId === sorted[i - 1]!.seqId) throw new Error("Duplicate seqId in pool");
+    if (at(sorted, i).seqId === at(sorted, i - 1).seqId) throw new Error("Duplicate seqId in pool");
   }
   for (const c of sorted) {
     if (c.author !== author) throw new Error("Commitment author does not match pool author");
   }
-  return { author, commitments: sorted, consumedUpTo: 0 };
+  for (let i = 1; i < sorted.length; i++) {
+    if (at(sorted, i).seed !== at(sorted, 0).seed) throw new Error("Commitment seed mismatch in pool");
+  }
+  return { author, commitments: sorted, consumedCount: 0 };
 }
 
 export interface Challenge {
+  seed: string;
   seqId: number;
   fingerprint: string;
 }
 
 export function nextChallenge(pool: SecretPoolState): Challenge | null {
-  if (pool.consumedUpTo >= pool.commitments.length) return null;
-  const next = pool.commitments[pool.consumedUpTo]!;
-  return { seqId: next.seqId, fingerprint: next.fingerprint };
+  if (pool.consumedCount >= pool.commitments.length) return null;
+  const next = at(pool.commitments, pool.consumedCount);
+  return { seed: next.seed, seqId: next.seqId, fingerprint: next.fingerprint };
 }
 
 export interface ChallengeEvent {
   challenger: string;
   targetAuthor: string;
+  seed: string;
   seqId: number;
   fingerprint: string;
 }
@@ -149,17 +170,19 @@ export function verifyChallenge(pool: SecretPoolState, challenge: ChallengeEvent
   const next = nextChallenge(pool);
   if (!next) return false;
   if (challenge.targetAuthor !== pool.author) return false;
+  if (challenge.seed !== next.seed) return false;
   if (challenge.seqId !== next.seqId) return false;
   if (challenge.fingerprint !== next.fingerprint) return false;
   return true;
 }
 
 export interface Reveal {
+  seed: string;
   seqId: number;
   secret: string;
   newFingerprint: string;
   stateHash: string;
-  sides: number;
+  claimedRoll: number;
 }
 
 export interface RevealOutput {
@@ -167,31 +190,36 @@ export interface RevealOutput {
   updatedPool: SecretPoolState;
 }
 
-export function revealSecret(pool: SecretPoolState, reveal: Reveal): RevealOutput {
+export function revealSecret(pool: SecretPoolState, reveal: Reveal, states: readonly GameState[]): RevealOutput {
   const challenge = nextChallenge(pool);
   if (!challenge) throw new Error("No pending challenge");
   if (reveal.seqId !== challenge.seqId) throw new Error("seqId does not match next challenge");
+  if (reveal.seed !== challenge.seed) throw new Error("Seed does not match challenge");
 
   const fingerprint = createHash("sha256")
+    .update(reveal.seed)
     .update(pool.author)
     .update(reveal.seqId.toString())
     .update(reveal.secret)
     .digest("hex");
   if (fingerprint !== challenge.fingerprint) throw new Error("Secret does not match fingerprint");
 
-  const roll = deriveRoll(reveal.stateHash, reveal.secret, reveal.sides);
+  const sides = lookupSides(states, reveal.stateHash);
+  const roll = deriveRoll(reveal.stateHash, reveal.secret, sides);
+  if (roll !== reveal.claimedRoll) throw new Error("Claimed roll does not match computed roll");
 
-  const lastSeqId = pool.commitments[pool.commitments.length - 1]!.seqId;
+  const last = at(pool.commitments, pool.commitments.length - 1);
   const newCommitment: ClosedSecret = {
+    seed: last.seed,
     author: pool.author,
-    seqId: lastSeqId + 1,
+    seqId: last.seqId + 1,
     fingerprint: reveal.newFingerprint,
   };
 
   const updatedPool: SecretPoolState = {
     author: pool.author,
     commitments: [...pool.commitments, newCommitment],
-    consumedUpTo: pool.consumedUpTo + 1,
+    consumedCount: pool.consumedCount + 1,
   };
 
   return { roll, updatedPool };
@@ -200,20 +228,24 @@ export function revealSecret(pool: SecretPoolState, reveal: Reveal): RevealOutpu
 export function verifyReveal(
   author: string,
   expectedFingerprint: string,
-  seqId: number,
-  secret: string,
-  stateHash: string,
-  sides: number,
-  claimedRoll: number,
+  reveal: Reveal,
+  states: readonly GameState[],
 ): boolean {
   const fingerprint = createHash("sha256")
+    .update(reveal.seed)
     .update(author)
-    .update(seqId.toString())
-    .update(secret)
+    .update(reveal.seqId.toString())
+    .update(reveal.secret)
     .digest("hex");
   if (fingerprint !== expectedFingerprint) return false;
-  const roll = deriveRoll(stateHash, secret, sides);
-  return roll === claimedRoll;
+  let sides: number;
+  try {
+    sides = lookupSides(states, reveal.stateHash);
+  } catch {
+    return false;
+  }
+  const roll = deriveRoll(reveal.stateHash, reveal.secret, sides);
+  return roll === reveal.claimedRoll;
 }
 
 export interface VerifyGameResult {
@@ -226,12 +258,12 @@ export function verifyGame(
   initialCommitments: Record<string, readonly ClosedSecret[]>,
   reveals: Record<string, readonly Reveal[]>,
   openedSecrets: Record<string, readonly OpenSecret[]>,
+  expectedSides?: number,
 ): VerifyGameResult {
   const errors: string[] = [];
 
   if (!verifyChain(states)) {
-    errors.push("Game state chain is invalid");
-    return { valid: false, errors };
+    return { valid: false, errors: ["Game state chain is invalid — state chain must be valid before any other checks"] };
   }
 
   for (const [author, commitments] of Object.entries(initialCommitments)) {
@@ -239,8 +271,10 @@ export function verifyGame(
     const authorOpened = openedSecrets[author] ?? [];
 
     try {
-      const pool = reconstructPool(author, [...commitments], [...authorReveals]);
-      if (!verifyPoolFingerprints(pool, [...authorOpened])) {
+      const pool = reconstructPool(author, [...commitments], [...authorReveals], states);
+      if (authorOpened.length < pool.consumedCount) {
+        errors.push(`Missing opened secrets for ${author}: have ${authorOpened.length}, need ${pool.consumedCount}`);
+      } else if (!verifyPoolFingerprints(pool, [...authorOpened])) {
         errors.push(`Pool fingerprint mismatch for ${author}`);
       }
     } catch (e) {
@@ -248,6 +282,16 @@ export function verifyGame(
     }
 
     for (const reveal of authorReveals) {
+      if (expectedSides !== undefined) {
+        try {
+          const sides = lookupSides(states, reveal.stateHash);
+          if (sides !== expectedSides) {
+            errors.push(`Reveal seqId ${reveal.seqId} by ${author} has sides ${sides}, expected ${expectedSides}`);
+          }
+        } catch {
+          errors.push(`Reveal seqId ${reveal.seqId} by ${author} references state without sides`);
+        }
+      }
       if (!findStateInChain(states, reveal.stateHash)) {
         errors.push(`Reveal seqId ${reveal.seqId} by ${author} references unknown state ${reveal.stateHash.slice(0, 8)}...`);
       }
@@ -261,13 +305,21 @@ export function reconstructPool(
   author: string,
   commitments: ClosedSecret[],
   reveals: Reveal[],
+  states: readonly GameState[],
 ): SecretPoolState {
   let pool = createPool(author, commitments);
   for (const reveal of reveals) {
-    const result = revealSecret(pool, reveal);
+    const result = revealSecret(pool, reveal, states);
     pool = result.updatedPool;
   }
   return pool;
+}
+
+export function lookupSides(states: readonly GameState[], stateHash: string): number {
+  const state = findStateInChain(states, stateHash);
+  if (!state) throw new Error(`State ${stateHash.slice(0, 8)}... not found in chain`);
+  if (state.sides === undefined) throw new Error(`State ${stateHash.slice(0, 8)}... does not define sides`);
+  return state.sides;
 }
 
 export function findStateInChain(chain: readonly GameState[], hash: string): GameState | null {
@@ -280,7 +332,7 @@ export function findStateInChain(chain: readonly GameState[], hash: string): Gam
 export function verifyPoolFingerprints(pool: SecretPoolState, opened: OpenSecret[]): boolean {
   for (const open of opened) {
     const match = pool.commitments.find(
-      (c) => c.author === open.author && c.seqId === open.seqId,
+      (c) => c.author === open.author && c.seqId === open.seqId && c.seed === open.seed,
     );
     if (!match) return false;
     if (!verifyOpenSecret(open)) return false;

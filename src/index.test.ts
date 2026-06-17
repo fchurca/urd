@@ -18,6 +18,7 @@ import {
   verifyChallenge,
   findStateInChain,
   verifyGame,
+  lookupSides,
 } from "./index.ts";
 
 describe("GameState chain", () => {
@@ -61,6 +62,10 @@ describe("GameState chain", () => {
     const g2: GameState = { ...createNextState(g1, "b", 1), prevHash: null };
     equal(verifyChain([g1, g2]), false);
   });
+
+  it("rejects an empty chain", () => {
+    equal(verifyChain([]), false);
+  });
 });
 
 describe("findStateInChain", () => {
@@ -82,18 +87,46 @@ describe("findStateInChain", () => {
   });
 });
 
+describe("lookupSides", () => {
+  it("returns sides from a state in the chain", () => {
+    const g = createGenesisState("roll", 0, 20);
+    equal(lookupSides([g], g.hash), 20);
+  });
+
+  it("throws when state hash is not found", () => {
+    throws(() => lookupSides([], "unknown"));
+  });
+
+  it("throws when state does not define sides", () => {
+    const g = createGenesisState("no dice", 0);
+    throws(() => lookupSides([g], g.hash));
+  });
+});
+
 describe("Secret pool", () => {
-  it("creates a closed secret from author, seq id, and secret", () => {
-    const s = createClosedSecret("alice", 0, "my-secret");
+  it("creates a closed secret from author, seq id, secret, and seed", () => {
+    const s = createClosedSecret("alice", 0, "my-secret", "game-42");
     equal(s.author, "alice");
     equal(s.seqId, 0);
+    equal(s.seed, "game-42");
     ok(typeof s.fingerprint === "string" && s.fingerprint.length === 64);
+  });
+
+  it("defaults seed to empty string", () => {
+    const s = createClosedSecret("alice", 0, "secret");
+    equal(s.seed, "");
   });
 
   it("creates consistent fingerprints for identical inputs", () => {
     const a = createClosedSecret("bob", 1, "hello");
     const b = createClosedSecret("bob", 1, "hello");
     equal(a.fingerprint, b.fingerprint);
+  });
+
+  it("produces different fingerprints for different seeds", () => {
+    const a = createClosedSecret("alice", 0, "secret", "game-A");
+    const b = createClosedSecret("alice", 0, "secret", "game-B");
+    ok(a.fingerprint !== b.fingerprint);
   });
 
   it("produces different fingerprints for different seq ids", () => {
@@ -103,16 +136,17 @@ describe("Secret pool", () => {
   });
 
   it("opens a closed secret into an open secret", () => {
-    const closed = createClosedSecret("alice", 0, "my-secret");
+    const closed = createClosedSecret("alice", 0, "my-secret", "g");
     const opened = openSecret(closed, "my-secret");
     equal(opened.author, "alice");
     equal(opened.seqId, 0);
+    equal(opened.seed, "g");
     equal(opened.fingerprint, closed.fingerprint);
     equal(opened.secret, "my-secret");
   });
 
   it("verifies an open secret matches its fingerprint", () => {
-    const closed = createClosedSecret("alice", 0, "my-secret");
+    const closed = createClosedSecret("alice", 0, "my-secret", "g");
     const opened = openSecret(closed, "my-secret");
     ok(verifyOpenSecret(opened));
   });
@@ -123,11 +157,25 @@ describe("Secret pool", () => {
   });
 
   it("rejects an open secret with wrong secret via verifyOpenSecret", () => {
+    const closed = createClosedSecret("alice", 0, "real", "g");
     const opened = {
+      seed: "g",
       author: "alice",
       seqId: 0,
-      fingerprint: createClosedSecret("alice", 0, "real").fingerprint,
+      fingerprint: closed.fingerprint,
       secret: "fake",
+    };
+    equal(verifyOpenSecret(opened), false);
+  });
+
+  it("rejects an open secret with mismatched seed", () => {
+    const closed = createClosedSecret("alice", 0, "s", "game-a");
+    const opened = {
+      seed: "game-b",
+      author: "alice",
+      seqId: 0,
+      fingerprint: closed.fingerprint,
+      secret: "s",
     };
     equal(verifyOpenSecret(opened), false);
   });
@@ -169,7 +217,7 @@ describe("Challenge / reveal", () => {
   it("creates a pool and picks the first challenge", () => {
     const pool = createPool("alice", aliceSecrets);
     equal(pool.author, "alice");
-    equal(pool.consumedUpTo, 0);
+    equal(pool.consumedCount, 0);
     const c = nextChallenge(pool);
     ok(c !== null);
     equal(c!.seqId, 0);
@@ -199,16 +247,26 @@ describe("Challenge / reveal", () => {
     ]));
   });
 
+  it("rejects a pool with mismatched seeds", () => {
+    throws(() => createPool("alice", [
+      createClosedSecret("alice", 0, "a", "game-x"),
+      createClosedSecret("alice", 1, "b", "game-y"),
+    ]));
+  });
+
   it("advances the challenge after a reveal", () => {
     const pool = createPool("alice", [aliceSecrets[0]!]);
     equal(nextChallenge(pool)!.seqId, 0);
+    const g = createGenesisState("roll", 0, 20);
+    const roll = deriveRoll(g.hash, "secret-0", 20);
     const { updatedPool } = revealSecret(pool, {
+      seed: "",
       seqId: 0,
       secret: "secret-0",
       newFingerprint: createClosedSecret("alice", 1, "replenish-0").fingerprint,
-      stateHash: "state-0",
-      sides: 20,
-    });
+      stateHash: g.hash,
+      claimedRoll: roll,
+    }, [g]);
     const next = nextChallenge(updatedPool);
     ok(next !== null);
     equal(next!.seqId, 1);
@@ -218,35 +276,42 @@ describe("Challenge / reveal", () => {
   it("processes a reveal and returns a valid roll", () => {
     const pool = createPool("alice", aliceSecrets);
     const newFp = createClosedSecret("alice", 3, "new-secret").fingerprint;
+    const g = createGenesisState("roll", 0, 20);
+    const expectedRoll = deriveRoll(g.hash, "secret-0", 20);
     const { roll, updatedPool } = revealSecret(pool, {
+      seed: "",
       seqId: 0,
       secret: "secret-0",
       newFingerprint: newFp,
-      stateHash: "state-1",
-      sides: 20,
-    });
+      stateHash: g.hash,
+      claimedRoll: expectedRoll,
+    }, [g]);
+    equal(roll, expectedRoll);
     ok(roll >= 1 && roll <= 20);
-    equal(updatedPool.consumedUpTo, 1);
+    equal(updatedPool.consumedCount, 1);
     equal(updatedPool.commitments.length, 4);
     equal(updatedPool.commitments[3]!.fingerprint, newFp);
   });
 
   it("steps through multiple reveals and never runs out due to replenish", () => {
+    const g = createGenesisState("roll", 0, 6);
     let pool = createPool("alice", aliceSecrets);
     for (let i = 0; i < 3; i++) {
       const c = nextChallenge(pool);
       ok(c !== null);
       equal(c!.seqId, i);
+      const roll = deriveRoll(g.hash, `secret-${i}`, 6);
       const result = revealSecret(pool, {
+        seed: "",
         seqId: i,
         secret: `secret-${i}`,
         newFingerprint: createClosedSecret("alice", 3 + i, `replenish-${i}`).fingerprint,
-        stateHash: `state-${i}`,
-        sides: 6,
-      });
+        stateHash: g.hash,
+        claimedRoll: roll,
+      }, [g]);
       pool = result.updatedPool;
     }
-    equal(pool.consumedUpTo, 3);
+    equal(pool.consumedCount, 3);
     equal(pool.commitments.length, 6);
     const next = nextChallenge(pool);
     ok(next !== null);
@@ -255,103 +320,197 @@ describe("Challenge / reveal", () => {
 
   it("rejects a reveal with wrong seqId", () => {
     const pool = createPool("alice", aliceSecrets);
+    const g = createGenesisState("roll", 0, 20);
     throws(() => revealSecret(pool, {
+      seed: "",
       seqId: 99,
       secret: "anything",
       newFingerprint: "x".repeat(64),
-      stateHash: "s",
-      sides: 20,
-    }));
+      stateHash: g.hash,
+      claimedRoll: 1,
+    }, [g]));
+  });
+
+  it("rejects a reveal with wrong seed", () => {
+    const closed = createClosedSecret("alice", 0, "s", "real-seed");
+    const pool = createPool("alice", [closed]);
+    const g = createGenesisState("roll", 0, 20);
+    throws(() => revealSecret(pool, {
+      seed: "wrong-seed",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: 1,
+    }, [g]));
+  });
+
+  it("processes a reveal with non-empty seed", () => {
+    const closed = createClosedSecret("alice", 0, "s", "my-seed");
+    const pool = createPool("alice", [closed]);
+    const newFp = createClosedSecret("alice", 1, "r", "my-seed").fingerprint;
+    const g = createGenesisState("roll", 0, 20);
+    const roll = deriveRoll(g.hash, "s", 20);
+    const { updatedPool } = revealSecret(pool, {
+      seed: "my-seed",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: newFp,
+      stateHash: g.hash,
+      claimedRoll: roll,
+    }, [g]);
+    equal(updatedPool.consumedCount, 1);
+    equal(updatedPool.commitments[1]!.seed, "my-seed");
   });
 
   it("rejects a reveal with wrong secret", () => {
     const pool = createPool("alice", aliceSecrets);
+    const g = createGenesisState("roll", 0, 20);
     throws(() => revealSecret(pool, {
+      seed: "",
       seqId: 0,
       secret: "wrong-secret",
       newFingerprint: "x".repeat(64),
-      stateHash: "s",
-      sides: 20,
-    }));
+      stateHash: g.hash,
+      claimedRoll: 1,
+    }, [g]));
   });
 
   it("allows reveal against the same pool state (caller must track pool via event chain)", () => {
+    const g = createGenesisState("roll", 0, 20);
     const pool = createPool("alice", [aliceSecrets[0]!]);
+    const roll = deriveRoll(g.hash, "secret-0", 20);
     const input = {
+      seed: "",
       seqId: 0,
       secret: "secret-0",
       newFingerprint: createClosedSecret("alice", 1, "x").fingerprint,
-      stateHash: "s",
-      sides: 20,
+      stateHash: g.hash,
+      claimedRoll: roll,
     };
-    const r1 = revealSecret(pool, input);
-    const r2 = revealSecret(pool, input);
+    const r1 = revealSecret(pool, input, [g]);
+    const r2 = revealSecret(pool, input, [g]);
     equal(r1.roll, r2.roll);
-    equal(r1.updatedPool.consumedUpTo, 1);
-    equal(r2.updatedPool.consumedUpTo, 1);
+    equal(r1.updatedPool.consumedCount, 1);
+    equal(r2.updatedPool.consumedCount, 1);
+  });
+
+  it("rejects a reveal with wrong claimed roll", () => {
+    const pool = createPool("alice", [aliceSecrets[0]!]);
+    const g = createGenesisState("roll", 0, 20);
+    throws(() => revealSecret(pool, {
+      seed: "",
+      seqId: 0,
+      secret: "secret-0",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: 999,
+    }, [g]));
   });
 
   it("verifies a reveal independently", () => {
     const closed = createClosedSecret("bob", 5, "bob-secret");
-    const stateHash = "game-state-42";
-    const sides = 20;
-    const secret = "bob-secret";
-    const expectedRoll = deriveRoll(stateHash, secret, sides);
-    ok(verifyReveal("bob", closed.fingerprint, 5, secret, stateHash, sides, expectedRoll));
+    const g = createGenesisState("roll", 0, 20);
+    const reveal: Reveal = {
+      seed: "",
+      seqId: 5,
+      secret: "bob-secret",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: deriveRoll(g.hash, "bob-secret", 20),
+    };
+    ok(verifyReveal("bob", closed.fingerprint, reveal, [g]));
+  });
+
+  it("verifies a reveal with seed", () => {
+    const closed = createClosedSecret("bob", 5, "bob-secret", "game-X");
+    const g = createGenesisState("roll", 0, 20);
+    const reveal: Reveal = {
+      seed: "game-X",
+      seqId: 5,
+      secret: "bob-secret",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: deriveRoll(g.hash, "bob-secret", 20),
+    };
+    ok(verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
 
   it("rejects verification with wrong claimed roll", () => {
     const closed = createClosedSecret("bob", 5, "bob-secret");
-    equal(verifyReveal("bob", closed.fingerprint, 5, "bob-secret", "state", 20, 999), false);
+    const g = createGenesisState("roll", 0, 20);
+    const reveal: Reveal = {
+      seed: "",
+      seqId: 5,
+      secret: "bob-secret",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: 999,
+    };
+    equal(verifyReveal("bob", closed.fingerprint, reveal, [g]), false);
   });
 
   it("rejects verification with wrong secret", () => {
     const closed = createClosedSecret("bob", 5, "bob-secret");
-    const goodRoll = deriveRoll("state", "bob-secret", 20);
-    equal(verifyReveal("bob", closed.fingerprint, 5, "wrong", "state", 20, goodRoll), false);
+    const g = createGenesisState("roll", 0, 20);
+    const goodRoll = deriveRoll(g.hash, "bob-secret", 20);
+    const reveal: Reveal = {
+      seed: "",
+      seqId: 5,
+      secret: "wrong",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: goodRoll,
+    };
+    equal(verifyReveal("bob", closed.fingerprint, reveal, [g]), false);
   });
 });
 
 describe("Pool reconstruction", () => {
   it("reconstructs pool from initial commitments and reveals", () => {
+    const g = createGenesisState("roll", 0, 20);
     const commitments = [
       createClosedSecret("alice", 0, "s0"),
       createClosedSecret("alice", 1, "s1"),
     ];
     const reveals: Reveal[] = [
       {
+        seed: "",
         seqId: 0,
         secret: "s0",
         newFingerprint: createClosedSecret("alice", 2, "r0").fingerprint,
-        stateHash: "s",
-        sides: 20,
+        stateHash: g.hash,
+        claimedRoll: deriveRoll(g.hash, "s0", 20),
       },
       {
+        seed: "",
         seqId: 1,
         secret: "s1",
         newFingerprint: createClosedSecret("alice", 3, "r1").fingerprint,
-        stateHash: "s",
-        sides: 20,
+        stateHash: g.hash,
+        claimedRoll: deriveRoll(g.hash, "s1", 20),
       },
     ];
-    const pool = reconstructPool("alice", commitments, reveals);
-    equal(pool.consumedUpTo, 2);
+    const pool = reconstructPool("alice", commitments, reveals, [g]);
+    equal(pool.consumedCount, 2);
     equal(pool.commitments.length, 4);
   });
 
   it("reconstruction yields the same pool as sequential reveals", () => {
+    const g = createGenesisState("roll", 0, 6);
     const commitments = [createClosedSecret("alice", 0, "x")];
     const reveals: Reveal[] = [
       {
+        seed: "",
         seqId: 0,
         secret: "x",
         newFingerprint: createClosedSecret("alice", 1, "y").fingerprint,
-        stateHash: "s",
-        sides: 6,
+        stateHash: g.hash,
+        claimedRoll: deriveRoll(g.hash, "x", 6),
       },
     ];
-    const pool = reconstructPool("alice", commitments, reveals);
-    equal(pool.consumedUpTo, 1);
+    const pool = reconstructPool("alice", commitments, reveals, [g]);
+    equal(pool.consumedCount, 1);
     equal(nextChallenge(pool)!.seqId, 1);
   });
 
@@ -359,13 +518,14 @@ describe("Pool reconstruction", () => {
     throws(() => {
       reconstructPool("alice", [createClosedSecret("alice", 0, "s")], [
         {
+          seed: "",
           seqId: 0,
           secret: "wrong",
           newFingerprint: "x".repeat(64),
           stateHash: "s",
-          sides: 6,
+          claimedRoll: 1,
         } as Reveal,
-      ]);
+      ], []);
     });
   });
 });
@@ -382,14 +542,14 @@ describe("Pool fingerprint verification", () => {
   it("rejects when an opened secret is missing from the pool", () => {
     const s0 = createClosedSecret("alice", 0, "s0");
     const pool = createPool("alice", [s0]);
-    const unknown = { author: "alice", seqId: 99, fingerprint: "x".repeat(64), secret: "y" };
+    const unknown = { seed: "", author: "alice", seqId: 99, fingerprint: "x".repeat(64), secret: "y" };
     equal(verifyPoolFingerprints(pool, [unknown]), false);
   });
 
   it("rejects when an opened secret has a wrong secret", () => {
     const s0 = createClosedSecret("alice", 0, "s0");
     const pool = createPool("alice", [s0]);
-    const opened = { author: "alice", seqId: 0, fingerprint: s0.fingerprint, secret: "wrong" };
+    const opened = { seed: "", author: "alice", seqId: 0, fingerprint: s0.fingerprint, secret: "wrong" };
     equal(verifyPoolFingerprints(pool, [opened]), false);
   });
 });
@@ -400,6 +560,7 @@ describe("Challenge verification", () => {
     const challenge: ChallengeEvent = {
       challenger: "bob",
       targetAuthor: "alice",
+      seed: "",
       seqId: 0,
       fingerprint: pool.commitments[0]!.fingerprint,
     };
@@ -411,24 +572,42 @@ describe("Challenge verification", () => {
     const challenge: ChallengeEvent = {
       challenger: "bob",
       targetAuthor: "alice",
+      seed: "",
       seqId: 0,
       fingerprint: "x".repeat(64),
     };
     equal(verifyChallenge(pool, challenge), false);
   });
 
-  it("rejects a challenge against a depleted pool", () => {
-    const pool = createPool("alice", [createClosedSecret("alice", 0, "s")]);
-    const { updatedPool } = revealSecret(pool, {
-      seqId: 0,
-      secret: "s",
-      newFingerprint: createClosedSecret("alice", 1, "r").fingerprint,
-      stateHash: "s",
-      sides: 20,
-    });
+  it("rejects a challenge with wrong seed", () => {
+    const s = createClosedSecret("alice", 0, "s", "game-X");
+    const pool = createPool("alice", [s]);
     const challenge: ChallengeEvent = {
       challenger: "bob",
       targetAuthor: "alice",
+      seed: "wrong-seed",
+      seqId: 0,
+      fingerprint: s.fingerprint,
+    };
+    equal(verifyChallenge(pool, challenge), false);
+  });
+
+  it("rejects a challenge against a depleted pool", () => {
+    const g = createGenesisState("roll", 0, 20);
+    const pool = createPool("alice", [createClosedSecret("alice", 0, "s")]);
+    const roll = deriveRoll(g.hash, "s", 20);
+    const { updatedPool } = revealSecret(pool, {
+      seed: "",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: createClosedSecret("alice", 1, "r").fingerprint,
+      stateHash: g.hash,
+      claimedRoll: roll,
+    }, [g]);
+    const challenge: ChallengeEvent = {
+      challenger: "bob",
+      targetAuthor: "alice",
+      seed: "",
       seqId: 0,
       fingerprint: pool.commitments[0]!.fingerprint,
     };
@@ -440,6 +619,12 @@ describe("Security properties", () => {
   it("different authors produce different fingerprints for the same secret", () => {
     const a = createClosedSecret("alice", 0, "same");
     const b = createClosedSecret("bob", 0, "same");
+    ok(a.fingerprint !== b.fingerprint);
+  });
+
+  it("different seeds produce different fingerprints for identical inputs", () => {
+    const a = createClosedSecret("alice", 0, "secret", "game-A");
+    const b = createClosedSecret("alice", 0, "secret", "game-B");
     ok(a.fingerprint !== b.fingerprint);
   });
 
@@ -459,15 +644,36 @@ describe("Security properties", () => {
 
   it("a reveal with correct secret passes verification", () => {
     const closed = createClosedSecret("alice", 0, "secret");
-    ok(verifyReveal("alice", closed.fingerprint, 0, "secret", "hash", 6, deriveRoll("hash", "secret", 6)));
+    const g = createGenesisState("roll", 0, 6);
+    const reveal: Reveal = {
+      seed: "",
+      seqId: 0,
+      secret: "secret",
+      newFingerprint: "x".repeat(64),
+      stateHash: g.hash,
+      claimedRoll: deriveRoll(g.hash, "secret", 6),
+    };
+    ok(verifyReveal("alice", closed.fingerprint, reveal, [g]));
   });
 
   it("replay of same reveal on different state yields different roll and fails original verification", () => {
     const closed = createClosedSecret("bob", 0, "s");
-    const rollA = deriveRoll("state-a", "s", 20);
-    const rollB = deriveRoll("state-b", "s", 20);
-    equal(verifyReveal("bob", closed.fingerprint, 0, "s", "state-a", 20, rollA), true);
-    equal(verifyReveal("bob", closed.fingerprint, 0, "s", "state-a", 20, rollB), false);
+    const gA = createGenesisState("state-a", 0, 20);
+    const gB = createGenesisState("state-b", 1, 20);
+    const rollA = deriveRoll(gA.hash, "s", 20);
+    const rollB = deriveRoll(gB.hash, "s", 20);
+    const revealA: Reveal = {
+      seed: "", seqId: 0, secret: "s",
+      newFingerprint: "x".repeat(64),
+      stateHash: gA.hash, claimedRoll: rollA,
+    };
+    const revealB: Reveal = {
+      seed: "", seqId: 0, secret: "s",
+      newFingerprint: "x".repeat(64),
+      stateHash: gA.hash, claimedRoll: rollB,
+    };
+    equal(verifyReveal("bob", closed.fingerprint, revealA, [gA]), true);
+    equal(verifyReveal("bob", closed.fingerprint, revealB, [gA]), false);
   });
 
   it("roll distribution is uniform (no modulo bias on small sides)", () => {
@@ -497,14 +703,16 @@ describe("Security properties", () => {
 describe("verifyGame", () => {
   it("passes a valid game with one reveal", () => {
     const g1 = createGenesisState("start", 0);
-    const g2 = createNextState(g1, "roll happened", 1);
+    const g2 = createNextState(g1, "roll happened", 1, 20);
     const closed = createClosedSecret("alice", 0, "s0");
+    const roll = deriveRoll(g2.hash, "s0", 20);
     const reveals: Reveal[] = [{
+      seed: "",
       seqId: 0,
       secret: "s0",
       newFingerprint: createClosedSecret("alice", 1, "r0").fingerprint,
       stateHash: g2.hash,
-      sides: 20,
+      claimedRoll: roll,
     }];
     const opened = [openSecret(closed, "s0")];
     const result = verifyGame(
@@ -534,14 +742,16 @@ describe("verifyGame", () => {
 
   it("fails when reveal references unknown state hash", () => {
     const g1 = createGenesisState("start", 0);
-    const g2 = createNextState(g1, "move", 1);
+    const g2 = createNextState(g1, "move", 1, 20);
     const closed = createClosedSecret("alice", 0, "s0");
+    const roll = deriveRoll("unknown-hash", "s0", 20);
     const reveals: Reveal[] = [{
+      seed: "",
       seqId: 0,
       secret: "s0",
       newFingerprint: createClosedSecret("alice", 1, "r0").fingerprint,
       stateHash: "unknown-hash",
-      sides: 20,
+      claimedRoll: roll,
     }];
     const result = verifyGame(
       [g1, g2],
@@ -557,6 +767,7 @@ describe("verifyGame", () => {
     const g1 = createGenesisState("start", 0);
     const closed = createClosedSecret("alice", 0, "s0");
     const opened = [{
+      seed: "",
       author: "alice",
       seqId: 0,
       fingerprint: closed.fingerprint,
@@ -574,14 +785,16 @@ describe("verifyGame", () => {
 
   it("fails when a reveal uses wrong secret", () => {
     const g1 = createGenesisState("start", 0);
-    const g2 = createNextState(g1, "move", 1);
+    const g2 = createNextState(g1, "move", 1, 20);
     const closed = createClosedSecret("alice", 0, "s0");
+    const roll = deriveRoll(g2.hash, "wrong", 20);
     const reveals: Reveal[] = [{
+      seed: "",
       seqId: 0,
       secret: "wrong",
       newFingerprint: createClosedSecret("alice", 1, "r0").fingerprint,
       stateHash: g2.hash,
-      sides: 20,
+      claimedRoll: roll,
     }];
     const result = verifyGame(
       [g1, g2],
@@ -591,5 +804,41 @@ describe("verifyGame", () => {
     );
     equal(result.valid, false);
     ok(result.errors.some((e: string) => e.includes("reconstruction")));
+  });
+
+  it("fails when opened secrets are missing for consumed reveals", () => {
+    const g1 = createGenesisState("start", 0);
+    const g2 = createNextState(g1, "roll", 1, 6);
+    const closed = createClosedSecret("alice", 0, "s");
+    const roll = deriveRoll(g2.hash, "s", 6);
+    const reveals: Reveal[] = [{
+      seed: "",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: createClosedSecret("alice", 1, "r").fingerprint,
+      stateHash: g2.hash,
+      claimedRoll: roll,
+    }];
+    const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {});
+    equal(result.valid, false);
+    ok(result.errors.some((e: string) => e.includes("Missing opened secrets")));
+  });
+
+  it("fails when expectedSides does not match reveal", () => {
+    const g1 = createGenesisState("start", 0);
+    const g2 = createNextState(g1, "roll", 1, 6);
+    const closed = createClosedSecret("alice", 0, "s");
+    const roll = deriveRoll(g2.hash, "s", 6);
+    const reveals: Reveal[] = [{
+      seed: "",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: "x".repeat(64),
+      stateHash: g2.hash,
+      claimedRoll: roll,
+    }];
+    const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
+    equal(result.valid, false);
+    ok(result.errors.some((e: string) => e.includes("sides")));
   });
 });

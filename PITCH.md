@@ -34,7 +34,7 @@ URD (URD's Roll Derivation) is a minimal protocol built on three ideas:
 
 1. **Pre-committed secrets**: before the game starts, each player publishes
    a list of closed secrets `(author, seq_id, fingerprint)` where
-   `fingerprint = hash(author + seq_id + secret)`. This locks in their
+   `fingerprint = hash(seed + author + seq_id + secret)`. This locks in their
    randomness without revealing it.
 2. **State-anchored derivation**: a roll is `hash(game_state, secret)` —
    deterministic given the state, unpredictable until both are known.
