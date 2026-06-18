@@ -1190,6 +1190,23 @@ describe("verifyGame", () => {
     ok(result.errors.some((e: string) => e.includes("must be a finite integer >= 2")));
   });
 
+  it("fails when state referenced by reveal has sides exceeding 2^48 limit", () => {
+    const g1 = createGenesisState("start", 0);
+    const g2 = createNextState(g1, "roll", 1, 2 ** 48 + 1);
+    const closed = createClosedSecret("alice", 0, "s", "");
+    const reveals: Reveal[] = [{
+      seed: "",
+      seqId: 0,
+      secret: "s",
+      newFingerprint: "a".repeat(64),
+      stateHash: g2.hash,
+      claimedRoll: 1,
+    }];
+    const result = verifyGame([g1, g2], { alice: [closed] }, { alice: reveals }, {}, 20);
+    equal(result.valid, false);
+    ok(result.errors.some((e: string) => e.includes("must be a finite integer >= 2 and ≤ 2^48")));
+  });
+
   it("fails when opened secrets reference an author without initial commitments", () => {
     const g1 = createGenesisState("start", 0);
     const result = verifyGame([g1], {}, {}, { bob: [{ seed: "", author: "bob", seqId: 0, fingerprint: "a".repeat(64), secret: "x" }] });

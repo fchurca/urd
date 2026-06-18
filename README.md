@@ -249,8 +249,7 @@ table below documents every rejection reason across the API.
 | `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the expected fingerprint |
 | `State abc... not found in chain` | `reveal.stateHash` does not match any state in the chain |
 | `State abc... does not define sides` | The referenced state has no `sides` field |
-| `State abc... sides must be a finite integer >= 2, got ...` | Invalid sides value on referenced state |
-| (propagated from `deriveRoll`) | `sides` exceeds 2^48 (the rejection sampling 48-bit limit) |
+| `State abc... sides must be a finite integer >= 2 and ≤ 2^48, got ...` | Invalid sides value on referenced state (including > 2^48) |
 | `Challenger secret provided but no challenger commitment` | `reveal.challengerSecret` is set but no `challenger` argument was passed |
 | `Challenger secret does not match challenger commitment` | The challenger's secret does not hash to `challenger.fingerprint` |
 | `Claimed roll does not match computed roll` | `deriveRoll(rollHash, secret, sides[, challengerSecret]) !== reveal.claimedRoll` |
@@ -270,8 +269,7 @@ table below documents every rejection reason across the API.
 | `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the committed fingerprint |
 | `State abc... not found in chain` | `reveal.stateHash` does not match any state in the chain |
 | `State abc... does not define sides` | The referenced state has no `sides` field |
-| `State abc... sides must be a finite integer >= 2, got ...` | Invalid sides value on referenced state |
-| (propagated from `deriveRoll`) | `sides` exceeds 2^48 (the rejection sampling 48-bit limit) |
+| `State abc... sides must be a finite integer >= 2 and ≤ 2^48, got ...` | Invalid sides value on referenced state (including > 2^48) |
 | `Challenger secret provided but no challenger commitment` | `reveal.challengerSecret` is set but no `challenger` argument was passed |
 | `Challenger secret does not match challenger commitment` | The challenger's secret does not hash to `challenger.fingerprint` |
 | `Claimed roll does not match computed roll` | `deriveRoll(rollHash, secret, sides[, challengerSecret]) !== reveal.claimedRoll` |

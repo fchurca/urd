@@ -34,6 +34,8 @@ function taggedHash(tag: string, ...parts: string[]): string {
   return h.digest("hex");
 }
 
+const MAX_SIDES = 2 ** 48;
+
 function at<T>(arr: readonly T[], index: number): T {
   const val = arr[index];
   if (val === undefined) throw new Error(`Index ${index} out of bounds`);
@@ -162,9 +164,8 @@ export function verifyChain(states: readonly GameState[]): void {
  * @returns A value in [1, sides]
  */
 export function deriveRoll(rollHash: string, secret: string, sides: number, challengerSecret?: string): number {
-  const maxVal = 2 ** 48;
-  if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2 || sides > maxVal) throw new Error("Roll sides must be a finite integer >= 2 and ≤ 2^48");
-  const maxAcceptable = maxVal - (maxVal % sides);
+  if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2 || sides > MAX_SIDES) throw new Error("Roll sides must be a finite integer >= 2 and ≤ 2^48");
+  const maxAcceptable = MAX_SIDES - (MAX_SIDES % sides);
   let hash = challengerSecret !== undefined
     ? taggedHash("urd-roll/v1", rollHash, secret, challengerSecret)
     : taggedHash("urd-roll/v1", rollHash, secret);
@@ -479,7 +480,7 @@ function lookupState(states: readonly GameState[], stateHash: string): GameState
   const state = findStateInChain(states, stateHash);
   if (!state) throw new Error(`State ${stateHash.slice(0, 8)}... not found in chain`);
   if (state.sides === undefined) throw new Error(`State ${stateHash.slice(0, 8)}... does not define sides`);
-  if (!Number.isFinite(state.sides) || !Number.isInteger(state.sides) || state.sides < 2) throw new Error(`State ${stateHash.slice(0, 8)}... sides must be a finite integer >= 2, got ${state.sides}`);
+  if (!Number.isFinite(state.sides) || !Number.isInteger(state.sides) || state.sides < 2 || state.sides > MAX_SIDES) throw new Error(`State ${stateHash.slice(0, 8)}... sides must be a finite integer >= 2 and ≤ 2^48, got ${state.sides}`);
   return state;
 }
 
