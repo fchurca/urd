@@ -73,6 +73,25 @@ describe("GameState chain", () => {
   it("rejects an empty chain", () => {
     throws(() => verifyChain([]));
   });
+
+  it("rejects genesis state with NaN timestamp", () => {
+    throws(() => createGenesisState("x", NaN));
+    throws(() => createGenesisState("x", Infinity));
+    throws(() => createGenesisState("x", -Infinity));
+  });
+
+  it("rejects next state with NaN timestamp", () => {
+    const g = createGenesisState("g", 0);
+    throws(() => createNextState(g, "x", NaN));
+    throws(() => createNextState(g, "x", Infinity));
+    throws(() => createNextState(g, "x", -Infinity));
+  });
+
+  it("rejects a chain where a state has invalid timestamp", () => {
+    const g1 = createGenesisState("a", 0);
+    const g2: GameState = { ...createNextState(g1, "b", 1), timestamp: NaN };
+    throws(() => verifyChain([g1, g2]));
+  });
 });
 
 describe("findStateInChain", () => {

@@ -9,7 +9,8 @@ export interface GameState {
   sides?: number;
 }
 
-/** A commitment: the public part of a secret before reveal. The fingerprint binds the secret to the seed, author, and seqId. */
+/** A commitment: the public part of a secret before reveal. The fingerprint binds the secret to the seed, author, and seqId.
+ * `ChallengerCommitment` extends this type — the same fields serve both the owner of a commitment and a peer who challenges it. */
 export interface ClosedSecret {
   seed: string;
   author: string;
@@ -96,6 +97,7 @@ export function verifyOpenSecret(open: OpenSecret): void {
  * @param sides - Optional number of sides for dice rolls derived from this state
  */
 export function createGenesisState(data: string, timestamp: number, sides?: number): GameState {
+  if (!Number.isFinite(timestamp)) throw new Error("Timestamp must be a finite number");
   return {
     hash: hashState(data, null, timestamp, sides),
     prevHash: null,
@@ -115,6 +117,7 @@ export function createGenesisState(data: string, timestamp: number, sides?: numb
  * @param sides - Optional number of sides for dice rolls derived from this state
  */
 export function createNextState(prev: GameState, data: string, timestamp: number, sides?: number): GameState {
+  if (!Number.isFinite(timestamp)) throw new Error("Timestamp must be a finite number");
   const hash = hashState(data, prev.hash, timestamp, sides);
   return {
     hash,
@@ -133,6 +136,7 @@ export function verifyChain(states: readonly GameState[]): void {
   if (states.length === 0) throw new Error("Chain is empty");
   for (let i = 0; i < states.length; i++) {
     const state = at(states, i);
+    if (!Number.isFinite(state.timestamp)) throw new Error(`State ${state.hash.slice(0, 8)}... has invalid timestamp`);
     const expectedHash = hashState(state.data, state.prevHash, state.timestamp, state.sides);
     if (state.hash !== expectedHash) throw new Error(`State ${state.hash.slice(0, 8)}... hash is invalid`);
     if (i > 0) {
@@ -221,12 +225,7 @@ export function nextChallenge(pool: SecretPoolState): NextChallenge | null {
 }
 
 /** A challenger's pre-committed secret that contributes to a multi-source roll. */
-export interface ChallengerCommitment {
-  seed: string;
-  author: string;
-  seqId: number;
-  fingerprint: string;
-}
+export interface ChallengerCommitment extends ClosedSecret {}
 
 /** An on-wire challenge event from a challenger targeting a specific author's next commitment. */
 export interface ChallengeEvent {

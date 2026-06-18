@@ -228,8 +228,9 @@ table below documents every rejection reason across the API.
 #### `verifyChain(states)`
 
 | Error message | When |
-|---|---|
+|---|---|---|
 | `Chain is empty` | `states` array has length 0 |
+| `State abc... has invalid timestamp` | A state's `timestamp` is not a finite number (e.g., `NaN` or `Infinity`) |
 | `State abc... hash is invalid` | A state's `hash` field does not match `hashState(data, prevHash, timestamp, sides)` |
 | `Chain broken at abc...: prevHash does not match previous state` | A non-genesis state's `prevHash` does not reference the previous state's hash |
 | `Genesis state abc... has prevHash, expected null` | The first state has a non-null `prevHash` |
