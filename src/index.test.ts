@@ -949,6 +949,14 @@ describe("verifyGame", () => {
     equal(result.errors.length, 0);
   });
 
+  it("passes with an author that has commitments but no reveals", () => {
+    const g1 = createGenesisState("start", 0);
+    const closed = createClosedSecret("alice", 0, "s", "");
+    const result = verifyGame([g1], { alice: [closed] }, {}, {});
+    ok(result.valid);
+    equal(result.errors.length, 0);
+  });
+
   it("fails on broken chain", () => {
     const g1 = createGenesisState("start", 0);
     const g2 = createGenesisState("rogue", 1);
