@@ -5,7 +5,7 @@
 A cryptographic protocol that lets players roll dice over Nostr with publicly
 verifiable commitments — no server, no blockchain, no "trust me bro." Each
 player pre-commits to hashed secrets. To roll, a peer challenges you to
-reveal the next secret in line. The result is `hash(game_state, secret)`,
+reveal the next secret in line. The result is `hash(prev_state_hash, secret)`,
 deterministic and publicly verifiable. Fully async, shared-nothing,
 identity via Nostr keys. Now in proof-of-concept.
 
@@ -36,7 +36,7 @@ URD (URD's Roll Derivation) is a minimal protocol built on three ideas:
    a list of closed secrets `(author, seq_id, fingerprint)` where
    `fingerprint = hash(seed + author + seq_id + secret)`. This locks in their
    randomness without revealing it.
-2. **State-anchored derivation**: a roll is `hash(game_state, secret)` —
+2. **State-anchored derivation**: a roll is `hash(prev_state_hash, secret)` —
    deterministic given the state, unpredictable until both are known.
 3. **FIFO consumption with challenges**: secrets are consumed in order by
    ascending `seq_id`. Any player can demand a reveal by citing the next

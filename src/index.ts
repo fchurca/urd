@@ -148,23 +148,26 @@ export function verifyChain(states: readonly GameState[]): void {
  * Derive a deterministic roll in [1, sides] from a state hash and secret.
  * Uses rejection sampling on a 48-bit hash digest to eliminate modulo bias.
  *
- * @param stateHash - The hash of the game state this roll is bound to
- * @param secret - The revealed secret
+ * When a challengerSecret is provided, the roll depends on both the roller's
+ * and the challenger's secrets — neither party can predict the outcome alone.
+ *
+ * @param rollHash - Hash value that binds the roll (typically `prevHash ?? hash` of the referenced state)
+ * @param secret - The revealed secret of the secret owner
  * @param sides - Number of faces (must be a finite integer >= 2 and <= 2^48)
+ * @param challengerSecret - Optional second secret from the challenger for multi-source derivation
  * @returns A value in [1, sides]
  */
-export function deriveRoll(stateHash: string, secret: string, sides: number): number {
+export function deriveRoll(rollHash: string, secret: string, sides: number, challengerSecret?: string): number {
   const maxVal = 2 ** 48;
   if (!Number.isFinite(sides) || !Number.isInteger(sides) || sides < 2 || sides > maxVal) throw new Error("Roll sides must be a finite integer >= 2 and ≤ 2^48");
   const maxAcceptable = maxVal - (maxVal % sides);
-  let hash = taggedHash("urd-roll/v1", stateHash, secret);
+  let hash = challengerSecret !== undefined
+    ? taggedHash("urd-roll/v1", rollHash, secret, challengerSecret)
+    : taggedHash("urd-roll/v1", rollHash, secret);
   let offset = 0;
-  // Rejection sampling against 48-bit values eliminates modulo bias.
-  // If val >= maxAcceptable the value falls outside the fair range
-  // and we re-roll by consuming the next 48-bit chunk from the hash.
   while (true) {
     if (offset + 12 > hash.length) {
-      hash = createHash("sha256").update(hash).digest("hex");
+      hash = createHash("sha256").update(Buffer.from(hash, "hex")).digest("hex");
       offset = 0;
     }
     const val = parseInt(hash.slice(offset, offset + 12), 16);
@@ -217,6 +220,14 @@ export function nextChallenge(pool: SecretPoolState): NextChallenge | null {
   return { seed: next.seed, seqId: next.seqId, fingerprint: next.fingerprint };
 }
 
+/** A challenger's pre-committed secret that contributes to a multi-source roll. */
+export interface ChallengerCommitment {
+  seed: string;
+  author: string;
+  seqId: number;
+  fingerprint: string;
+}
+
 /** An on-wire challenge event from a challenger targeting a specific author's next commitment. */
 export interface ChallengeEvent {
   challenger: string;
@@ -224,6 +235,7 @@ export interface ChallengeEvent {
   seed: string;
   seqId: number;
   fingerprint: string;
+  challengerCommitment?: ChallengerCommitment;
 }
 
 /**
@@ -248,6 +260,8 @@ export interface Reveal {
   newFingerprint: string;
   stateHash: string;
   claimedRoll: number;
+  /** Optional challenger secret for multi-source derivation. When present, the roll depends on both secrets. */
+  challengerSecret?: string;
 }
 
 /** The result of a processReveal call: the derived roll and the updated pool state. */
@@ -260,8 +274,18 @@ export interface RevealOutput {
  * Process a reveal against a pool: consume the next commitment, derive the roll, append a new commitment.
  * Returns a RevealOutput with the roll and updated pool. The input pool is not mutated.
  * See README for full error table.
+ *
+ * @param pool - The current pool state
+ * @param reveal - The reveal event
+ * @param states - Game state chain for side/prev-hash lookup
+ * @param challenger - Optional challenger commitment for multi-source verification. Required when `reveal.challengerSecret` is set.
  */
-export function processReveal(pool: SecretPoolState, reveal: Reveal, states: readonly GameState[]): RevealOutput {
+export function processReveal(
+  pool: SecretPoolState,
+  reveal: Reveal,
+  states: readonly GameState[],
+  challenger?: ChallengerCommitment,
+): RevealOutput {
   if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) throw new Error("newFingerprint must be a 64-char hex string");
   const challenge = nextChallenge(pool);
   if (!challenge) throw new Error("No pending challenge");
@@ -271,8 +295,17 @@ export function processReveal(pool: SecretPoolState, reveal: Reveal, states: rea
   const fingerprint = taggedHash("urd-commit/v1", reveal.seed, pool.author, reveal.seqId.toString(), reveal.secret);
   if (fingerprint !== challenge.fingerprint) throw new Error("Secret does not match fingerprint");
 
-  const sides = lookupSides(states, reveal.stateHash);
-  const roll = deriveRoll(reveal.stateHash, reveal.secret, sides);
+  const state = lookupState(states, reveal.stateHash);
+  const sides = state.sides!;
+  const rollHash = state.prevHash ?? state.hash;
+
+  if (reveal.challengerSecret !== undefined) {
+    if (!challenger) throw new Error("Challenger secret provided but no challenger commitment");
+    const expectedFp = taggedHash("urd-commit/v1", challenger.seed, challenger.author, challenger.seqId.toString(), reveal.challengerSecret);
+    if (expectedFp !== challenger.fingerprint) throw new Error("Challenger secret does not match challenger commitment");
+  }
+
+  const roll = deriveRoll(rollHash, reveal.secret, sides, reveal.challengerSecret);
   if (roll !== reveal.claimedRoll) throw new Error("Claimed roll does not match computed roll");
 
   const last = at(pool.commitments, pool.commitments.length - 1);
@@ -297,18 +330,34 @@ export function processReveal(pool: SecretPoolState, reveal: Reveal, states: rea
  * Checks that the secret matches the expected fingerprint, the state exists in the chain,
  * and the claimed roll matches the computed roll.
  * See README for full error table.
+ *
+ * @param author - The pool author whose commitment is being revealed
+ * @param expectedFingerprint - The fingerprint from the pool commitment this reveal should match
+ * @param reveal - The reveal event
+ * @param states - Game state chain for side/prev-hash lookup
+ * @param challenger - Optional challenger commitment for multi-source verification. Required when `reveal.challengerSecret` is set.
  */
 export function verifyReveal(
   author: string,
   expectedFingerprint: string,
   reveal: Reveal,
   states: readonly GameState[],
+  challenger?: ChallengerCommitment,
 ): void {
   if (!/^[0-9a-f]{64}$/i.test(reveal.newFingerprint)) throw new Error("newFingerprint must be a 64-char hex string");
   const fingerprint = taggedHash("urd-commit/v1", reveal.seed, author, reveal.seqId.toString(), reveal.secret);
-  if (fingerprint !== expectedFingerprint) throw new Error("Reveal fingerprint does not match commitment");
-  const sides = lookupSides(states, reveal.stateHash);
-  const roll = deriveRoll(reveal.stateHash, reveal.secret, sides);
+  if (fingerprint !== expectedFingerprint) throw new Error("Secret does not match fingerprint");
+  const state = lookupState(states, reveal.stateHash);
+  const sides = state.sides!;
+  const rollHash = state.prevHash ?? state.hash;
+
+  if (reveal.challengerSecret !== undefined) {
+    if (!challenger) throw new Error("Challenger secret provided but no challenger commitment");
+    const expectedFp = taggedHash("urd-commit/v1", challenger.seed, challenger.author, challenger.seqId.toString(), reveal.challengerSecret);
+    if (expectedFp !== challenger.fingerprint) throw new Error("Challenger secret does not match challenger commitment");
+  }
+
+  const roll = deriveRoll(rollHash, reveal.secret, sides, reveal.challengerSecret);
   if (roll !== reveal.claimedRoll) throw new Error("Claimed roll does not match computed roll");
 }
 
@@ -328,6 +377,7 @@ export interface VerifyGameResult {
  * @param reveals - Map of author → their Reveal events (in order)
  * @param openedSecrets - Map of author → their OpenSecret records (one per consumed commitment)
  * @param expectedSides - Optional: if set, validates every reveal's state.sides matches
+ * @param challengerCommitments - Optional: map of author → their challenger commitments (parallel to reveals, undefined = no challenger for that reveal)
  * @returns VerifyGameResult with valid flag and accumulated error messages
  */
 export function verifyGame(
@@ -336,6 +386,7 @@ export function verifyGame(
   reveals: Record<string, readonly Reveal[]>,
   openedSecrets: Record<string, readonly OpenSecret[]>,
   expectedSides?: number,
+  challengerCommitments?: Record<string, readonly (ChallengerCommitment | undefined)[]>,
 ): VerifyGameResult {
   const errors: string[] = [];
 
@@ -363,7 +414,7 @@ export function verifyGame(
 
     let poolReconstructFailed = false;
     try {
-      const pool = reconstructPool(author, [...commitments], [...authorReveals], states);
+      const pool = reconstructPool(author, [...commitments], [...authorReveals], states, challengerCommitments?.[author]);
       if (authorOpened.length !== pool.consumedCount) {
         errors.push(`Opened secrets count for ${author}: have ${authorOpened.length}, need ${pool.consumedCount}`);
       } else {
@@ -401,6 +452,7 @@ export function verifyGame(
  * @param commitments - Initial ClosedSecret commitments (will be sorted)
  * @param reveals - Reveal events in chronological order
  * @param states - Game state chain for roll derivation
+ * @param challengerCommitments - Optional parallel array of challenger commitments (one per reveal, undefined if no challenger for that reveal)
  * @returns The reconstructed SecretPoolState
  */
 export function reconstructPool(
@@ -408,13 +460,28 @@ export function reconstructPool(
   commitments: ClosedSecret[],
   reveals: Reveal[],
   states: readonly GameState[],
+  challengerCommitments?: readonly (ChallengerCommitment | undefined)[],
 ): SecretPoolState {
   let pool = createPool(author, commitments);
-  for (const reveal of reveals) {
-    const result = processReveal(pool, reveal, states);
+  for (let i = 0; i < reveals.length; i++) {
+    const reveal = at(reveals, i);
+    const challenger = challengerCommitments?.[i];
+    const result = processReveal(pool, reveal, states, challenger);
     pool = result.updatedPool;
   }
   return pool;
+}
+
+/**
+ * Internal helper: find a state in the chain and validate its sides field.
+ * Throws if the state is not found, missing sides, or has invalid sides.
+ */
+function lookupState(states: readonly GameState[], stateHash: string): GameState {
+  const state = findStateInChain(states, stateHash);
+  if (!state) throw new Error(`State ${stateHash.slice(0, 8)}... not found in chain`);
+  if (state.sides === undefined) throw new Error(`State ${stateHash.slice(0, 8)}... does not define sides`);
+  if (!Number.isFinite(state.sides) || !Number.isInteger(state.sides) || state.sides < 2) throw new Error(`State ${stateHash.slice(0, 8)}... sides must be a finite integer >= 2, got ${state.sides}`);
+  return state;
 }
 
 /**
@@ -422,11 +489,7 @@ export function reconstructPool(
  * Throws if the state is not found, missing sides, or has invalid sides.
  */
 export function lookupSides(states: readonly GameState[], stateHash: string): number {
-  const state = findStateInChain(states, stateHash);
-  if (!state) throw new Error(`State ${stateHash.slice(0, 8)}... not found in chain`);
-  if (state.sides === undefined) throw new Error(`State ${stateHash.slice(0, 8)}... does not define sides`);
-  if (!Number.isFinite(state.sides) || !Number.isInteger(state.sides) || state.sides < 2) throw new Error(`State ${stateHash.slice(0, 8)}... sides must be a finite integer >= 2, got ${state.sides}`);
-  return state.sides;
+  return lookupState(states, stateHash).sides!;
 }
 
 /**
