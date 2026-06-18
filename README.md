@@ -239,14 +239,14 @@ table below documents every rejection reason across the API.
 
 | Error message | When |
 |---|---|
-| `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seq_id, secret)` does not equal `open.fingerprint` |
+| `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not equal `open.fingerprint` |
 
 #### `verifyReveal(author, expectedFingerprint, reveal, states, challenger?)`
 
 | Error message | When |
 |---|---|---|
 | `newFingerprint must be a 64-char hex string` | `reveal.newFingerprint` is not valid hex |
-| `Secret does not match fingerprint` | `taggedHash(seed, author, seq_id, secret)` does not match the expected fingerprint |
+| `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the expected fingerprint |
 | `State abc... not found in chain` | `reveal.stateHash` does not match any state in the chain |
 | `State abc... does not define sides` | The referenced state has no `sides` field |
 | `State abc... sides must be a finite integer >= 2, got ...` | Invalid sides value on referenced state |
@@ -267,7 +267,7 @@ table below documents every rejection reason across the API.
 | `No pending challenge` | All commitments have been consumed (pool depleted) |
 | `seqId does not match next challenge` | `reveal.seqId` does not match the next unconsumed commitment's seqId |
 | `Seed does not match challenge` | `reveal.seed` does not match the next commitment's seed |
-| `Secret does not match fingerprint` | `taggedHash(seed, author, seq_id, secret)` does not match the committed fingerprint |
+| `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the committed fingerprint |
 | `State abc... not found in chain` | `reveal.stateHash` does not match any state in the chain |
 | `State abc... does not define sides` | The referenced state has no `sides` field |
 | `State abc... sides must be a finite integer >= 2, got ...` | Invalid sides value on referenced state |
