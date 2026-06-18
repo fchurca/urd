@@ -536,6 +536,49 @@ describe("Challenge / reveal", () => {
     };
     throws(() => verifyReveal("bob", closed.fingerprint, reveal, [g]));
   });
+
+  it("verifyReveal with valid challenger commitment verifies both secrets", () => {
+    const g = createGenesisState("roll", 0, 20);
+    const closed = createClosedSecret("alice", 0, "roller-secret", "");
+    const challengerCommitment = createClosedSecret("bob", 0, "challenger-secret", "");
+    const roll = deriveRoll(g.hash, "roller-secret", 20, "challenger-secret");
+    const reveal: Reveal = {
+      seed: "", seqId: 0, secret: "roller-secret",
+      newFingerprint: "a".repeat(64),
+      stateHash: g.hash, claimedRoll: roll,
+      challengerSecret: "challenger-secret",
+    };
+    doesNotThrow(() => verifyReveal("alice", closed.fingerprint, reveal, [g], {
+      seed: "", author: "bob", seqId: 0, fingerprint: challengerCommitment.fingerprint,
+    }));
+  });
+
+  it("verifyReveal rejects mismatched challenger secret", () => {
+    const g = createGenesisState("roll", 0, 20);
+    const closed = createClosedSecret("alice", 0, "roller", "");
+    const challengerCommitment = createClosedSecret("bob", 0, "real", "");
+    const reveal: Reveal = {
+      seed: "", seqId: 0, secret: "roller",
+      newFingerprint: "a".repeat(64),
+      stateHash: g.hash, claimedRoll: 10,
+      challengerSecret: "fake",
+    };
+    throws(() => verifyReveal("alice", closed.fingerprint, reveal, [g], {
+      seed: "", author: "bob", seqId: 0, fingerprint: challengerCommitment.fingerprint,
+    }));
+  });
+
+  it("verifyReveal rejects challenger secret without commitment", () => {
+    const g = createGenesisState("roll", 0, 20);
+    const closed = createClosedSecret("alice", 0, "roller", "");
+    const reveal: Reveal = {
+      seed: "", seqId: 0, secret: "roller",
+      newFingerprint: "a".repeat(64),
+      stateHash: g.hash, claimedRoll: 10,
+      challengerSecret: "anything",
+    };
+    throws(() => verifyReveal("alice", closed.fingerprint, reveal, [g]));
+  });
 });
 
 describe("Pool reconstruction", () => {
