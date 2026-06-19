@@ -10,6 +10,9 @@ planned but not yet built.
 one of the Norns who weave the threads of fate in Norse mythology — fitting for a protocol
 that derives deterministic outcomes from committed secrets.
 
+Demonstrator: [Vesta](https://github.com/fchurca/vesta) — a decentralized
+settlement-building board game built on URD, running on Nostr.
+
 License: see [LICENSE](./LICENSE) file (BSD 2-Clause).
 
 ![URD](./doc/urd.jpeg)
@@ -400,9 +403,9 @@ Relevant tags:
    - [x] Composite game verification (`verifyGame`)
    - [x] Security tests (farming resistance, non-reusability, determinism,
      distribution uniformity)
-3. Build a browser-only demo client that plays a simple game
-   (e.g., D&D ability check) over a Nostr test relay; the server is
-   just a static file server, no backend logic
+3. Articulate with [Vesta](https://github.com/fchurca/vesta) as a
+   demonstrator to showcase the protocol in a decentralized
+   settlement-building board game running on Nostr
 4. Private draws from shared decks using commutative primitives
 5. ???
 6. Profit!
