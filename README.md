@@ -10,6 +10,8 @@ planned but not yet built.
 one of the Norns who weave the threads of fate in Norse mythology — fitting for a protocol
 that derives deterministic outcomes from committed secrets.
 
+License: see [LICENSE](./LICENSE) file (BSD 2-Clause).
+
 ## Problem
 
 In peer-to-peer multiplayer games without a central server (e.g., play-by-mail
