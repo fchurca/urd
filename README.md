@@ -128,6 +128,10 @@ accepts any revealer as long as the secret matches the fingerprint.
 No extra encryption is needed — hiding is achieved by delaying publication
 of the reveal event.
 
+**Private draws from shared decks** (e.g., a common pool of advancement cards
+drawn by multiple players without revealing the remaining deck) will be
+addressed in a future release using commutative primitives (Soon™).
+
 ### Multi-source Derivation (Bias Prevention)
 
 The roller alone can compute the outcome before publishing and may choose to
@@ -395,4 +399,6 @@ Relevant tags:
 3. Build a browser-only demo client that plays a simple game
    (e.g., D&D ability check) over a Nostr test relay; the server is
    just a static file server, no backend logic
-4. (future)
+4. Private draws from shared decks using commutative primitives
+5. ???
+6. Profit!
