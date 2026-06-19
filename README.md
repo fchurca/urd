@@ -12,6 +12,8 @@ that derives deterministic outcomes from committed secrets.
 
 License: see [LICENSE](./LICENSE) file (BSD 2-Clause).
 
+![URD](./doc/urd.jpeg)
+
 ## Problem
 
 In peer-to-peer multiplayer games without a central server (e.g., play-by-mail
