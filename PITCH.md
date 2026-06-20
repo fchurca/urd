@@ -4,9 +4,10 @@
 
 A cryptographic protocol that lets players roll dice over Nostr with publicly
 verifiable commitments — no server, no blockchain, no "trust me bro." Each
-player pre-commits to hashed secrets. To roll, a peer challenges you to
-reveal the next secret in line. The result is `hash(prev_state_hash, secret)`,
-deterministic and publicly verifiable. Fully async, shared-nothing,
+player pre-commits to hashed secrets. To roll, a player declares which N
+secrets (their own or others') feed the result. Once all secrets are revealed,
+anyone resolves the roll: `SHA256(b64(state_hash) + ":" + b64(s1) + ":" + ...)`.
+Deterministic, publicly verifiable, delegated. Fully async, shared-nothing,
 identity via Nostr keys. Now in proof-of-concept.
 
 ## 3-Minute Pitch
@@ -25,26 +26,29 @@ way to get verifiable randomness.
 At a physical table, trust is built by sharing custody: you shuffle the
 deck, another player cuts it, and everyone takes turns dealing. URD
 replicates this interaction digitally — lock in a shuffled pool of secrets,
-let a peer cut by selecting which one to reveal, and deal the result using
-the public game state.
+let anyone nominate which secrets to use, and derive the result from all of
+them.
 
 ### The Solution
 
 URD (URD's Roll Derivation) is a minimal protocol built on three ideas:
 
-1. **Pre-committed secrets**: before the game starts, each player publishes
-   a list of closed secrets `(author, seq_id, fingerprint)` where
-   `fingerprint = hash(seed + author + seq_id + secret)`. This locks in their
-   randomness without revealing it.
-2. **State-anchored derivation**: a roll is `hash(prev_state_hash, secret)` —
-   deterministic given the state, unpredictable until both are known.
-3. **FIFO consumption with challenges**: secrets are consumed in order by
-   ascending `seq_id`. Any player can demand a reveal by citing the next
-   unused fingerprint from your pool. You cannot cherry-pick which secret
-   to reveal.
+1. **Pre-committed secrets**: each player publishes a pool of `ClosedSecret`
+   fingerprints `(author, seq_id, seed, fingerprint)` where
+   `fingerprint = hash(seed + author + seq_id + secret)`. New commitments can
+   be appended at any time.
+2. **Roll declaration**: a player publishes a `RollDeclaration` naming the
+   game state hash and which fingerprints (from any player's pool) will feed
+   the roll. Anyone can request any existing fingerprint.
+3. **Multi-secret derivation**: once all named secrets are revealed, the
+   roll is `SHA256(b64(gameHash) + ":" + b64(s1) + ":" + ...)` with rejection
+   sampling — deterministic given the state, unpredictable until all secrets
+   are known. With N≥2 independent parties, no single party can predict or
+   abort-bias the outcome.
 
 The result: fully asynchronous, zero infrastructure, publicly verifiable
-randomness over Nostr.
+randomness over Nostr. Secrets are consumed by fingerprint, not position —
+revelations can arrive in any order. Resolution can be delegated.
 
 ### Why Now
 
@@ -56,6 +60,7 @@ cryptographic primitives for trustless games. URD fills that gap.
 
 Proof-of-concept. Core types implemented: state chain (reverse-linked list
 with SHA-256 integrity), secret commitment (`ClosedSecret` / `OpenSecret`
-with per-author sequence numbers), roll derivation, and challenge/reveal
-mechanism with FIFO pool consumption and replenish. Protocol specification
-and Nostr event kinds being formalized.
+with per-author sequence numbers), multi-secret roll derivation with
+rejection sampling, roll declaration/reveal/resolution mechanism, and
+hierarchical verification. Protocol specification and Nostr event kinds
+being formalized.

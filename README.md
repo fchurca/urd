@@ -2,8 +2,8 @@
 
 A Verifiable Randomness Protocol for Decentralized "Play-by-Nostr" Games
 
-**Status:** proof-of-concept — state chain, secret pool, roll derivation, and
-challenge/reveal mechanism implemented. Nostr bindings and demo client are
+**Status:** proof-of-concept — state chain, secret pool, roll declaration/reveal/resolution,
+and full game verification implemented. Nostr bindings and demo client are
 planned but not yet built.
 
 **URD** (pronounced "urd") shares its name with [Urðr](https://en.wikipedia.org/wiki/Ur%C3%B0r),
@@ -48,92 +48,77 @@ result is dealt using the public game state.
 ### Components
 
 1. **Pre-committed secret pool**: each player publishes an ordered list of
-   fingerprints at game start. Each commitment is a closed secret published
+   fingerprints at game start. Each commitment is a `ClosedSecret` published
    as `(author, seq_id, seed, fingerprint)` where `fingerprint = hash(seed + author + seq_id + secret)`.
-   The initial pool can be as small as one fingerprint; new fingerprints are
-   appended during each reveal (with incremented `seq_id`).
+   The pool tracks consumption — when a secret is revealed and resolved, the
+   commitment is removed from `commitments[]` and pushed to `consumed[]` along
+   with the raw secret and roll id that consumed it. New commitments can be
+   appended at any time via `addToPool`, e.g., every time a player reveals a
+   secret.
 
    The `seed` is a per-game identifier that binds all commitments within a
    pool to the same game. It prevents cross-game replay: a secret revealed
    in game X cannot be reused in game Y because the fingerprints differ
    (the seed is part of the hash). All commitments in a pool share the same
-   seed — `createPool` enforces this equality.
-
-   Every type that references a secret (`ClosedSecret`, `OpenSecret`, `Reveal`,
-   `ChallengeEvent`) carries its own `seed` field. This redundancy is
-   intentional: each record may arrive from a different wire event and must
-   be verifiable in isolation without cross-referencing other events.
-   `verifyChallenge` and `verifyReveal` both check that the on-wire seed
-   matches the expected pool commitment, ensuring the event belongs to the
-   correct game.
+   seed — `createPool` and `addToPool` enforce this.
 
 2. **Game state chain**: linked Nostr events where each state references the
-   previous one (event `e` tag)
+   previous one (event `e` tag).
 
-3. **Roll derivation**: `roll = hash(prev_state_hash, secret[, challenger_secret])`
-   mapped to the requested range (e.g., 1–20 for a d20) — deterministic
-   derivation from the *previous* state (binding to an already-published,
-   immutable hash prevents timestamp grinding) and one or two secrets.
-   When a challenger also provides a secret, neither party can predict the
-   outcome alone (multi-source mode).
+3. **Roll declaration**: a player declares intent to roll N dice by publishing
+   a `RollDeclaration` containing the game state hash (salt) and a list of
+   `SecretRequest`s identifying which pool commitments feed the roll. Anyone
+   can request any existing fingerprint — their own or another player's.
+   Multiple secrets produce a multi-source roll where no single party can
+   predict the outcome.
 
-4. **FIFO consumption**: secrets are consumed in pool order (by ascending
-   `seq_id`), never reused. Sequence numbers are localized per author.
+4. **Secret reveal**: each secret's owner publishes a `SecretReveal` with
+   the raw secret matching their commitment. Reveals are identified by
+   fingerprint, not position — they can arrive in any order.
 
-5. **Challenge mechanism**: a player needing randomness publishes a "roll
-   intent"; another player challenges them by calling out the oldest unused
-   fingerprint from their pool. The roller must reveal the matching secret,
-   locking in the result.
+5. **Roll resolution**: once all requested secrets are published, anyone
+   resolves the roll via `resolveRoll` (or a delegate authoried by the
+   declarer). The roll is `SHA256(b64(gameHash) + ":" + b64(s1) + ":" + ...)`
+   with rejection sampling into the requested range.
 
 ### Flow
 
 Phase 0 — Setup: GM publishes kind:XXXXX with rules + their fingerprint pool.
-Each player responds with kind:XXXXX adding their own pool, forming a circular
-participant list.
+Each player responds with kind:XXXXX adding their own pool. All commitments
+are live from publication onward — new ones can be appended at any time.
 
-Phase 1 — Commit to roll: Player A publishes kind:XXXXX "intent to roll d20"
-referencing the current state. Player B publishes kind:XXXXX "challenge A"
-including A's oldest unused fingerprint.
+Phase 1 — Roll declaration: Player A publishes kind:XXXXX "roll declaration"
+with a `RollDeclaration` containing `gameHash` (the current game state hash),
+`sides`, and a list of `SecretRequest`s. Each request identifies a pool
+commitment by author, seqId, and fingerprint. A can request their own
+commitments (self-draw, delayed reveal) or any other player's (public roll).
+Multiple requests = multi-source (no party can predict alone).
 
-Phase 2 — Reveal: Player A publishes kind:XXXXX "reveal" with:
-- secret matching the challenged fingerprint
-- new fingerprint appended to pool (replenish, with `seq_id` incremented)
-- derived result: `hash(prev_state_hash, secret)` mapped to the requested range
+Phase 2 — Secret reveal: Each requested secret's owner publishes kind:XXXXX
+"secret reveal" with the raw secret. Reveals reference fingerprints, not
+positions — they can arrive in any order and at any time.
 
-Anyone verifies:
-- `hash(seed + author + seq_id + secret) == fingerprint` (initial commitment holds)
-- `hash(prev_state_hash, secret)` produces the claimed result
-- new fingerprint is appended at end of A's pool with correct `seq_id`
-- the referenced state hash exists in the verified game state chain
+Phase 3 — Roll resolution: Once all requested secrets are revealed, anyone
+publishes kind:XXXXX "roll resolution" with the computed result. The roll is
+`SHA256(b64(gameHash) + ":" + b64(s1) + ":" + b64(s2) + ...)` mapped to
+the requested range via rejection sampling. The verifier consumes the revealed
+secrets (removes from `commitments[]`, appends to `consumed[]`) to enforce
+FIFO ordering and prevent reuse.
 
-If A does not reveal within a reasonable time: forfeit (inactivity).
+**Verification hierarchy (each level independently usable):**
+1. `verifySecretReveal(author, expectedFingerprint, reveal)` — one secret matches its commitment
+2. `verifyRollDeclaration(declaration, pools)` — all requested fingerprints exist in pools
+3. `verifyRollResolution(resolution, pools)` — full roll: declarations + reveals + computation
+4. `consumeSecrets(pool, rollId, reveals)` — move revealed commitments to consumed
+5. `verifyGame(states, pools, resolutions, expectedSides?)` — full game replay
 
-**Note:** verification short-circuits on chain failure — if the state chain
-is invalid, the game is unrecoverable and all subsequent checks are skipped.
-
-**Hidden information / self-challenge**: the same challenge-reveal mechanism
-serves independent private random values (e.g., a private draw from one's own
-pool). A player can **self-challenge**
- — call `nextChallenge` on their own commitment pool, then `processReveal`
-with their own secret to consume the fingerprint privately (returns an updated pool). The derived
-result stays hidden until the player later publishes it (e.g., playing the
-drawn card).
-
-Alternatively, a player can ask a peer to reveal a secret for the same
-purpose. In either case, the protocol does not care who initiated the
-challenge — `verifyChallenge` accepts any challenger, and `processReveal`
-accepts any revealer as long as the secret matches the fingerprint.
-
-**Flow for a private draw:**
-1. Player calls `nextChallenge(pool)` — the pool can be their own or a peer's
-2. Player (or peer) calls `processReveal(pool, reveal, states)` to
-   consume the commitment and get a deterministic roll (returns an updated pool)
-3. The roll is not published yet — the player keeps it in their private state
-4. When the hidden information must be revealed (e.g., playing the card),
-   the player publishes the roll and the reveal details for verification
-
-No extra encryption is needed — hiding is achieved by delaying publication
-of the reveal event.
+**Hidden information / private draws:** A player publishes a roll declaration
+naming their own commitment. They reveal privately (keep the reveal event
+off-chain), compute the roll, and only publish the resolution later when
+the hidden information must be revealed (e.g., playing a drawn card). No
+extra encryption needed — hiding is achieved by delaying publication of the
+reveal event. A peer's secret can be requested the same way for the same
+purpose; the protocol does not care who owns the secret.
 
 **Private draws from shared decks** (e.g., a common pool of advancement cards
 drawn by multiple players without revealing the remaining deck) will be
@@ -142,90 +127,105 @@ addressed in a future release using commutative primitives (Soon™).
 ### Multi-source Derivation (Bias Prevention)
 
 The roller alone can compute the outcome before publishing and may choose to
-abort (forfeit). To eliminate this advantage, both parties can contribute a
-secret so that neither can predict the roll alone:
+abort (forfeit) rather than reveal. To eliminate this advantage, a roll
+declaration can request secrets from multiple parties so that no single party
+can predict the roll alone.
 
-1. The challenger selects a secret from their own committed pool and includes
-   its seed, author, seqId, and fingerprint in the `ChallengeEvent` as `challengerCommitment`
-2. The reveal includes the matching `challengerSecret`
-3. The roll is derived from both secrets: `roll = hash(prev_state_hash, secret_roller, secret_challenger)`
-4. `processReveal` and `verifyReveal` verify both secrets against their
-   respective commitments
-
-Multi-source is optional. In single-source mode (no challenger secret), abort
-is detectable and attributable but not prevented.
+A roll declaration lists any number of `SecretRequest`s, each targeting a
+specific fingerprint in any player's pool. The roll is derived from all
+revealed secrets combined — N parties must all cooperate to compute the
+outcome. The declarer chooses the request list, so they control the balance
+between bias risk and coordination cost.
 
 ### State Binding (Grinding Prevention)
 
-The roll is bound to the *previous* state's hash (`prevHash ?? hash` of the
-referenced state), not the current one. This prevents the roller from grinding
-their own state's timestamp to influence the outcome — the roll depends on an
-already-published, immutable state.
+The roll derivation uses the game state hash directly (`gameHash`). This hash
+is the hash of the referenced `GameState` — an already-published, immutable
+record. The declarer cannot grind timestamps to influence the outcome because
+the state must exist in the verified chain before the declaration.
 
 ### Quick Start
 
-A complete round — create a pool, challenge, reveal, and verify:
+A complete round — create a pool, declare a roll, reveal secrets, resolve,
+and verify:
 
 ```ts
 import {
   createPool, createClosedSecret, createOpenSecret,
-  createGenesisState, deriveRoll, nextChallenge,
-  processReveal, verifyReveal, verifyChallenge,
-  verifyPoolFingerprints,
+  createGenesisState, deriveRoll,
+  addToPool, verifySecretReveal, verifyRollDeclaration,
+  verifyRollResolution, resolveRoll, verifyGame,
+  consumeSecrets,
 } from "urd";
-import type { Reveal, ChallengeEvent } from "urd";
+import type {
+  RollDeclaration, SecretReveal, SecretRequest, RollResolution,
+} from "urd";
 
 // Player A commits to a secret pool
-const pool = createPool("alice", [
-  createClosedSecret("alice", 0, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv", "game-1"),
-]);
+const a0 = createClosedSecret("alice", 0, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv", "game-1");
+const poolAlice = createPool("alice", [a0]);
+const pools = { alice: poolAlice };
 
 // Game state is established
 const state = createGenesisState("start", 1001, 20);
 
-// Challenger picks the oldest unused fingerprint
-const challenge = nextChallenge(pool)!;
-
-// Player A reveals the secret, gets a d20 roll and an updated pool
-const roll = deriveRoll(state.hash, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv", 20);
-const reveal: Reveal = {
-  seed: "game-1",
-  seqId: 0,
-  secret: "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv",
-  newFingerprint: createClosedSecret("alice", 1, "k1l2m3n4o5p6q7r8s9t0", "game-1").fingerprint,
-  stateHash: state.hash,
-  claimedRoll: roll,
+// Someone declares a d20 roll requesting Alice's secret
+const declaration: RollDeclaration = {
+  gameHash: state.hash,
+  sides: 20,
+  requests: [{ author: "alice", seqId: 0, fingerprint: a0.fingerprint }],
 };
-const { updatedPool } = processReveal(pool, reveal, [state]);
+
+// Alice reveals the secret
+const revealA: SecretReveal = {
+  seed: "game-1", author: "alice", seqId: 0,
+  secret: "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv",
+  fingerprint: a0.fingerprint,
+};
+
+// Anyone resolves and publishes the roll
+const resolution = resolveRoll(declaration, [revealA]);
 
 // Any observer can verify after the fact
-verifyChallenge(pool, {
-  challenger: "bob",
-  targetAuthor: "alice",
-  ...challenge,
-} satisfies ChallengeEvent);
-verifyReveal("alice", pool.commitments[0]!.fingerprint, reveal, [state]);
-verifyPoolFingerprints(updatedPool, [createOpenSecret(pool.commitments[0]!, "a1b2c3d4e5f6g7h8i9j0klmnopqrstuv")]);
+verifyRollDeclaration(declaration, pools);
+verifySecretReveal("alice", a0.fingerprint, revealA);
+verifyRollResolution(resolution, pools);
+
+// Full game verification
+const result = verifyGame(
+  [state],
+  { alice: [a0] },
+  [resolution],
+);
+console.log(result.valid); // true
 ```
 
 ### Security Properties
 
-- **No farming**: the fingerprint determines which secret to use; you cannot
-  choose which secret to reveal. The roller computes the roll before publishing
-  and can choose to abort (forfeit) instead of revealing — abort is detectable
-  and attributable. **Multi-source mode** (both parties contribute a secret)
-  prevents even abort-based bias: neither party can compute the roll alone.
-- **No prediction**: the game state is unknown until published, and the secret
-  is unknown until revealed
+- **No farming**: the declaration names specific fingerprints before any secret
+  is revealed. The declarer cannot change the request list after seeing
+  outcomes. Committing to a set of fingerprints upfront eliminates secret
+  selection after the fact.
+- **Multi-source by construction**: a roll declaration can request any number
+  of secrets from any players. With N≥2 independent parties, no single party
+  can predict or abort-bias the outcome. Single-source rolls (N=1) are
+  detectable as a game-level choice.
+- **No prediction**: the game state hash is unknown until published, and the
+  secrets are unknown until revealed.
 - **One-shot commitment**: the fingerprint pool is published before any game
-  state exists; no fingerprints can be altered or reordered mid-game.
-  Fingerprints can be appended for later rolls
+  state exists; no fingerprints can be altered or reordered mid-game. New
+  commitments can be appended at any time for replenishment.
 - **Public verifiability**: any observer with the event chain can replay and
-  verify every result
+  verify every result using the verification hierarchy.
+- **Out-of-order reveals**: reveals reference fingerprints, not pool positions.
+  They can arrive in any order over the async transport.
+- **Delegated resolution**: anyone can compute the roll once all secrets are
+  revealed. The declarer can authorize a third party to resolve ("I toss, you
+  reveal").
 - **Timing-safe comparisons**: hash comparisons use string equality (`===`).
   The protocol targets turn-based games over Nostr where each round takes
   seconds or hours — microsecond timing leaks are irrelevant to the threat
-  model
+  model.
 - **Verifiable in a shared log**: URD assumes a shared event log (e.g., a Nostr
   relay) visible to all participants. The protocol does not provide byzantine
   fault-tolerant consensus; fork detection requires relay-level deduplication or
@@ -252,75 +252,56 @@ table below documents every rejection reason across the API.
 |---|---|
 | `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not equal `open.fingerprint` |
 
-#### `verifyReveal(author, expectedFingerprint, reveal, states, challenger?)`
+#### `verifySecretReveal(author, expectedFingerprint, reveal)`
 
 | Error message | When |
-|---|---|---|
-| `newFingerprint must be a 64-char hex string` | `reveal.newFingerprint` is not valid hex |
+|---|---|
+| `Secret author does not match expected author` | `reveal.author` does not match the `author` parameter |
 | `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the expected fingerprint |
-| `State abc... not found in chain` | `reveal.stateHash` does not match any state in the chain |
-| `State abc... does not define sides` | The referenced state has no `sides` field |
-| `State abc... sides must be a finite integer >= 2 and ≤ 2^48, got ...` | Invalid sides value on referenced state (including > 2^48) |
-| `Challenger secret provided but no challenger commitment` | `reveal.challengerSecret` is set but no `challenger` argument was passed |
-| `Challenger secret does not match challenger commitment` | The challenger's secret does not hash to `challenger.fingerprint` |
-| `Claimed roll does not match computed roll` | `deriveRoll(rollHash, secret, sides[, challengerSecret]) !== reveal.claimedRoll` |
 
-> `expectedFingerprint` is the `fingerprint` field from the `ClosedSecret` (the commitment published at game start). The caller extracts this from the commitment that corresponds to this reveal's `seqId`. The roll is computed from the **previous** state's hash (`state.prevHash ?? state.hash`) to prevent timestamp grinding.
-
-> **`verifyReveal` is read-only.** The sibling function `processReveal` performs the same checks but also returns an updated pool (consumes the commitment, appends a new one). Use `processReveal` during gameplay; use `verifyReveal` for post-hoc audit.
-
-#### `processReveal(pool, reveal, states, challenger?)`
+#### `verifyRollDeclaration(declaration, pools)`
 
 | Error message | When |
 |---|---|
-| `newFingerprint must be a 64-char hex string` | `reveal.newFingerprint` is not valid hex |
-| `No pending challenge` | All commitments have been consumed (pool depleted) |
-| `seqId does not match next challenge` | `reveal.seqId` does not match the next unconsumed commitment's seqId |
-| `Seed does not match challenge` | `reveal.seed` does not match the next commitment's seed |
-| `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the committed fingerprint |
-| `State abc... not found in chain` | `reveal.stateHash` does not match any state in the chain |
-| `State abc... does not define sides` | The referenced state has no `sides` field |
-| `State abc... sides must be a finite integer >= 2 and ≤ 2^48, got ...` | Invalid sides value on referenced state (including > 2^48) |
-| `Challenger secret provided but no challenger commitment` | `reveal.challengerSecret` is set but no `challenger` argument was passed |
-| `Challenger secret does not match challenger commitment` | The challenger's secret does not hash to `challenger.fingerprint` |
-| `Claimed roll does not match computed roll` | `deriveRoll(rollHash, secret, sides[, challengerSecret]) !== reveal.claimedRoll` |
+| `Roll sides must be a finite integer >= 2 and ≤ 2^48` | `declaration.sides` is not a valid roll range |
+| `Roll declaration must request at least one secret` | `declaration.requests` is empty |
+| `gameHash must be a 64-char hex string` | `declaration.gameHash` is not valid hex |
+| `Author ${author} has no pool` | The requested author has no pool record in the `pools` map |
+| `Fingerprint ${fp}... does not match next unconsumed commitment for ${author} (expected ${fp}...)` | The requested fingerprint is not the next unconsumed commitment in the author's pool (FIFO violation) |
+| `seqId mismatch for fingerprint ${fp}...` | The requested `seqId` does not match the commitment's `seqId` |
 
-#### `verifyChallenge(pool, challenge)`
+#### `verifyRollResolution(resolution, pools)`
 
 | Error message | When |
 |---|---|
-| `No pending challenge` | All commitments have been consumed |
-| `Challenge target author does not match pool author` | `challenge.targetAuthor !== pool.author` |
-| `Challenge seed does not match next commitment` | Seed does not match the next unconsumed commitment |
-| `Challenge seqId does not match next commitment` | `challenge.seqId` does not match the next available `seqId` |
-| `Challenge fingerprint does not match next commitment` | `challenge.fingerprint` does not match the next commitment's fingerprint |
+| (propagated from `verifyRollDeclaration`) | Declaration validation fails |
+| `Expected ${n} reveals, got ${m}` | Wrong number of reveals for the declared requests |
+| `Reveal ${i} fingerprint does not match request` | Reveal's fingerprint does not match the corresponding request |
+| `Reveal ${i} author does not match request` | Reveal's author does not match the corresponding request |
+| `Secret does not match fingerprint for reveal ${i}` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the reveal's fingerprint |
+| `Claimed roll does not match computed roll` | `deriveRoll(gameHash, secrets[], sides)` !== `resolution.roll` |
 
-#### `verifyPoolFingerprints(pool, opened)`
+#### `consumeSecrets(pool, rollId, reveals)`
 
 | Error message | When |
 |---|---|
-| `Expected ${pool.consumedCount} opened secrets, got ${opened.length}` | Wrong number of opened secrets for the consumed commitments |
-| `Opened secret (author=..., seqId=...) not found in pool commitments` | An opened secret does not correspond to any consumed commitment |
-| (propagated from `verifyOpenSecret`) | An opened secret's fingerprint does not match its revealed secret |
+| `Reveal author does not match pool author` | A reveal targets a different author than the pool |
+| `Fingerprint ${fp}... does not match next unconsumed commitment for ${author}` | A reveal's fingerprint does not match `commitments[0]` (either wrong secret or commitment was already consumed) |
+| `Index ${i} out of bounds` | More reveals than remaining commitments in the pool |
 
-#### `verifyGame(states, initialCommitments, reveals, openedSecrets, expectedSides?, challengerCommitments?)`
+#### `verifyGame(states, pools, resolutions, expectedSides?)`
 
 | Error message | When |
 |---|---|
 | (propagated from `verifyChain`) | Chain validation fails (short-circuits, no further checks) |
-| `Author ${author} has reveals but no initial commitments` | A reveal exists for an author not in `initialCommitments` |
-| `Author ${author} has opened secrets but no initial commitments` | Opened secrets exist for an author not in `initialCommitments` |
-| `Pool reconstruction failed for ${author}: ${msg}` | `reconstructPool` / `processReveal` threw (e.g., wrong secret, bad seqId, invalid `newFingerprint`) |
-| `Opened secrets count for ${author}: have ${have}, need ${need}` | Wrong number of opened secrets for the consumed commitments |
-| `Pool fingerprint mismatch for ${author}: ${msg}` | `verifyPoolFingerprints` threw (commitment not found or secret mismatch) |
-| `Reveal seqId ${n} by ${author} references unknown state ${hash}...` | `reveal.stateHash` is not in the verified chain |
-| `Reveal seqId ${n} by ${author} has sides ${sides}, expected ${expected}` | The state's `sides` does not match `expectedSides` |
+| `Pool creation failed for ${author}: ${msg}` | `createPool` threw for an author's commitment list |
+| (propagated from `verifyRollDeclaration` / `verifyRollResolution`) | Any resolution fails its checks |
+| `Resolution ${i} references unknown state ${hash}...` | `declaration.gameHash` does not match any state in the chain |
+| `Resolution ${i} has sides ${sides}, expected ${expected}` | The state referenced by `gameHash` has a different `sides` than `expectedSides` |
 
-> `openedSecrets` must contain one `OpenSecret` per consumed commitment (i.e., per reveal that was processed). Passing an empty or mismatched record will trigger a count mismatch error.
+> Pools are `Record<string, ClosedSecret[]>` keyed by author, containing all commitments ever published by that author (initial + any replenishments). Empty arrays are skipped. Consumption is tracked via `consumeSecrets`: consumed commitments move from `commitments[]` to `consumed[]` with the raw secret and roll id.
 >
-> All five maps (`initialCommitments`, `reveals`, `openedSecrets`, `challengerCommitments`) are keyed by author (the same string used in `createClosedSecret`). For a single-author game, each map has one entry; for multi-author games, each author has their own entry in each map.
->
-> `challengerCommitments[author]` is a parallel array to `reveals[author]` — one entry per reveal, where `undefined` means no challenger for that reveal. Required when any reveal has `challengerSecret` set. The `ChallengerCommitment` must include the same `seed`, `author`, `seqId`, and `fingerprint` that the challenger committed to via `createClosedSecret`.
+> Resolutions are self-contained — each `RollResolution` includes the full `RollDeclaration` and the `SecretReveal[]` in request order. This makes each resolution independently verifiable. The verifier calls `consumeSecrets` only for passing resolutions.
 
 ### Design Decisions
 
@@ -328,25 +309,30 @@ table below documents every rejection reason across the API.
   Each record type has a distinct tag: `urd-commit/v1` for commitment
   fingerprints, `urd-state/v1` for game state hashes, and `urd-roll/v1` for
   roll derivation. This prevents cross-domain collision attacks.
-- **Roll bound to previous state**: the roll is computed from `state.prevHash ?? state.hash`
-  — the previous state's hash (or the state's own hash if it is genesis). This
-  prevents the roller from grinding their own state's timestamp to influence
-  the outcome, because the roll depends on an already-published, immutable hash.
-- **Multi-source derivation (optional)**: when a `challengerSecret` is provided
-  in the reveal and a matching `ChallengerCommitment` in the challenge, the roll
-  depends on both the roller's and the challenger's secrets. Neither party can
-  predict the outcome alone. Single-source mode (no challenger secret) is
-  vulnerable to abort-based bias but remains verifiable and attributable.
+- **Roll uses N secrets**: the derivation formula is
+  `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + ...)`.
+  Any number of secrets (N≥1) can contribute, in declaration order. The
+  base64-encoded `:`-separated format provides domain separation within
+  the roll tag.
+- **Multi-source by construction**: a roll declaration requests N secrets
+  from any players' pools. With N≥2 independent parties, no single party
+  can predict or abort-bias the outcome. Single-source rolls (N=1) are
+  a game-level choice — the protocol treats them identically.
+- **Pool consumption tracking**: the pool tracks its own consumption via
+  `consumeSecrets`. Each consumed commitment is removed from `commitments[]`
+  and pushed to `consumed[]` with the raw secret and roll id. The verifier
+  advances pool state only for passing resolutions. FIFO order within each
+  pool is enforced naturally — you always consume from the front of the array.
+- **Delegated resolution**: `resolveRoll` is a pure computation. Anyone
+  with the declaration and reveals can compute the result. This enables
+  patterns like "I toss the die and you reveal it."
 - **Secret entropy**: secrets must have sufficient entropy to prevent
   brute-force prediction of the fingerprint. The library does not enforce a
   minimum entropy — it is the caller's responsibility to generate strong
   secrets (at least 128 bits, e.g., 32 hex characters from a CSPRNG). Never
   use guessable values like dictionary words or short strings. Multi-source
-  derivation mitigates weak secrets because the attacker would need to brute-force
-  *both* secrets simultaneously.
-- **Witness relays**: the protocol is fully peer-to-peer by default. Optional
-  witness relays can accelerate challenge notification, but the protocol does
-  not depend on them.
+  rolls mitigate weak secrets because the attacker would need to brute-force
+  *all* secrets simultaneously.
 
 ### Repudiation
 
@@ -357,8 +343,8 @@ may exploit:
 | Opportunity | Risk | Mitigation |
 |---|---|---|
 | **Future timestamp** — player publishes a state with `timestamp` far in the future | If the game turns unfavorable, the player can claim their clock was wrong and repudiate the state as invalid | Use the median of several relay-observed timestamps; reject timestamps more than N hours ahead of relay time |
-| **Late reveal** — player does not reveal within a reasonable window after being challenged | The player can observe others' moves before deciding whether to reveal; if unfavorable, they can stay silent and later claim the challenge expired | Forfeit (loss of turn or game); the challenger proceeds without the roll — the game treats the secret as unrevealable |
-| **Missing challenge** — no one challenges a player in time | Without a fingerprint call-out, a player could sit on their secret indefinitely | A consensus round or relay-enforced deadline; the state is considered firm if unchallenged after N events |
+| **Late reveal** — player does not reveal for a requested secret within a reasonable window | The player can observe others' moves before deciding whether to reveal; if unfavorable, they can stay silent | Forfeit (loss of turn or game); the roll remains unresolved and the declarer can abort it |
+| **Missing request** — no one requests a player's secret in time | A player could sit on their secret indefinitely | A consensus round or relay-enforced deadline; the secret expires if unused after N events |
 | **Clock disagreement** — two relays see different timestamps for the same event | Ambiguity about which state is canonical and which timestamps to use in hash derivation | Use relay-observed time (not event timestamp) for ordering; event timestamp is only used for hash binding |
 
 In a proof-of-concept or small game, these risks are tolerable. A production
@@ -369,11 +355,11 @@ reveal) enforced by social consensus or relay policy.
 
 Proposed new event kinds (e.g., 31000-31099 for games):
 - Kind X: Game Definition (fingerprint pool + rules)
-- Kind X+1: Join Game (add own pool)
+- Kind X+1: Join Game (add own pool, or replenish)
 - Kind X+2: Game State (move + updated state)
-- Kind X+3: Commit Roll (intent to roll)
-- Kind X+4: Challenge (demand fingerprint reveal)
-- Kind X+5: Reveal (reveal secret + result)
+- Kind X+3: Roll Declaration (intent to roll, names N secrets)
+- Kind X+4: Secret Reveal (reveal a single secret for one fingerprint)
+- Kind X+5: Roll Resolution (computed result, published by declarer or delegate)
 
 Relevant tags:
 - `e`: parent event reference (state chain)
@@ -392,17 +378,18 @@ Relevant tags:
    - [x] Chain verification (`verifyChain`)
    - [x] Secret types and commitment (`ClosedSecret`, `OpenSecret`,
      `createClosedSecret`, `createOpenSecret`, `verifyOpenSecret`)
-   - [x] Roll derivation with rejection sampling (`deriveRoll`)
-   - [x] Challenge / reveal mechanism (`SecretPoolState`, `createPool`,
-     `nextChallenge`, `processReveal`, `verifyReveal`)
-   - [x] Challenge event type and verification (`ChallengeEvent`,
-     `verifyChallenge`)
-   - [x] Pool reconstruction from event history (`reconstructPool`)
-   - [x] Pool fingerprint verification (`verifyPoolFingerprints`)
+   - [x] Roll derivation with N secrets and base64-encoded separator
+     (`deriveRoll`)
+   - [x] Pool management with consumption tracking (`SecretPoolState`,
+      `ConsumedSecret`, `createPool`, `addToPool`, `consumeSecrets`)
+   - [x] Roll declaration and secret reveal (`RollDeclaration`,
+     `SecretReveal`, `verifySecretReveal`, `verifyRollDeclaration`)
+   - [x] Roll resolution with multi-secret derivation (`RollResolution`,
+     `resolveRoll`, `verifyRollResolution`)
    - [x] State lookup in chain (`findStateInChain`)
    - [x] Composite game verification (`verifyGame`)
-   - [x] Security tests (farming resistance, non-reusability, determinism,
-     distribution uniformity)
+   - [x] Security tests (determinism, multi-secret non-predictability,
+     distribution uniformity, non-reusability)
 3. Articulate with [Vesta](https://github.com/fchurca/vesta) as a
    demonstrator to showcase the protocol in a decentralized
    settlement-building board game running on Nostr
