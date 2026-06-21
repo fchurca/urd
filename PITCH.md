@@ -1,4 +1,4 @@
-# URD (URD's Roll Derivation): Verifiable Dice for Nostr Games
+# URD 🔮 (URD's Roll Derivation): Verifiable Dice for Nostr Games
 
 ## 30-Second Pitch
 

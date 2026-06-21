@@ -6,7 +6,7 @@ A Verifiable Randomness Protocol for Decentralized "Play-by-Nostr" Games
 and full game verification implemented. Nostr bindings and demo client are
 planned but not yet built.
 
-**URD** (pronounced "urd") shares its name with [Urðr](https://en.wikipedia.org/wiki/Ur%C3%B0r),
+**URD** 🔮 (pronounced "urd") shares its name with [Urðr](https://en.wikipedia.org/wiki/Ur%C3%B0r),
 one of the Norns who weave the threads of fate in Norse mythology — fitting for a protocol
 that derives deterministic outcomes from committed secrets.
 
@@ -49,7 +49,7 @@ result is dealt using the public game state.
 
 1. **Pre-committed secret pool**: each player publishes an ordered list of
    fingerprints at game start. Each commitment is a `ClosedSecret` published
-   as `(author, seq_id, seed, fingerprint)` where `fingerprint = hash(seed + author + seq_id + secret)`.
+   as `(author, seq_id, seed, fingerprint)` where `fingerprint = taggedHash("urd-commit/v1", seed, author, seqId, secret)`.
    The pool tracks consumption — when a secret is revealed and resolved, the
    commitment is removed from `commitments[]` and pushed to `consumed[]` along
    with the raw secret and roll id that consumed it. New commitments can be
@@ -77,9 +77,9 @@ result is dealt using the public game state.
    fingerprint, not position — they can arrive in any order.
 
 5. **Roll resolution**: once all requested secrets are published, anyone
-   resolves the roll via `resolveRoll` (or a delegate authoried by the
-   declarer). The roll is `SHA256(b64(gameHash) + ":" + b64(s1) + ":" + ...)`
-   with rejection sampling into the requested range.
+    resolves the roll via `resolveRoll` (or a delegate authorized by the
+    declarer). The roll is `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + ...)`
+    with rejection sampling into the requested range.
 
 ### Flow
 
@@ -100,17 +100,20 @@ positions — they can arrive in any order and at any time.
 
 Phase 3 — Roll resolution: Once all requested secrets are revealed, anyone
 publishes kind:XXXXX "roll resolution" with the computed result. The roll is
-`SHA256(b64(gameHash) + ":" + b64(s1) + ":" + b64(s2) + ...)` mapped to
+`taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + b64(s2) + ...)` mapped to
 the requested range via rejection sampling. The verifier consumes the revealed
 secrets (removes from `commitments[]`, appends to `consumed[]`) to enforce
 FIFO ordering and prevent reuse.
 
 **Verification hierarchy (each level independently usable):**
-1. `verifySecretReveal(author, expectedFingerprint, reveal)` — one secret matches its commitment
-2. `verifyRollDeclaration(declaration, pools)` — all requested fingerprints exist in pools
-3. `verifyRollResolution(resolution, pools)` — full roll: declarations + reveals + computation
-4. `consumeSecrets(pool, rollId, reveals)` — move revealed commitments to consumed
-5. `verifyGame(states, pools, resolutions, expectedSides?)` — full game replay
+1. `verifyChain(states)` — game state chain integrity (hashes, links, timestamps)
+2. `verifyOpenSecret(open)` — a single opened secret matches its commitment
+3. `verifySecretReveal(author, expectedFingerprint, reveal)` — one secret matches its expected fingerprint
+4. `verifyRollDeclaration(declaration, pools)` — all requested fingerprints are next in line in their pools
+5. `verifyRollResolution(resolution, pools)` — full roll: declaration + reveals + computation
+6. `consumeSecrets(pool, rollId, reveals)` — move revealed commitments to consumed
+7. `verifyGame(states, commitmentMaps, resolutions, expectedSides?)` — full game replay
+8. `lookupSides(states, stateHash)` — look up the sides value for a state hash
 
 **Hidden information / private draws:** A player publishes a roll declaration
 naming their own commitment. They reveal privately (keep the reveal event
@@ -289,19 +292,27 @@ table below documents every rejection reason across the API.
 | `Fingerprint ${fp}... does not match next unconsumed commitment for ${author}` | A reveal's fingerprint does not match `commitments[0]` (either wrong secret or commitment was already consumed) |
 | `Index ${i} out of bounds` | More reveals than remaining commitments in the pool |
 
-#### `verifyGame(states, pools, resolutions, expectedSides?)`
+#### `verifyGame(states, commitmentMaps, resolutions, expectedSides?)`
 
 | Error message | When |
 |---|---|
 | (propagated from `verifyChain`) | Chain validation fails (short-circuits, no further checks) |
 | `Pool creation failed for ${author}: ${msg}` | `createPool` threw for an author's commitment list |
-| (propagated from `verifyRollDeclaration` / `verifyRollResolution`) | Any resolution fails its checks |
+| `Resolution ${i} failed: ${msg}` | A resolution's `verifyRollDeclaration` or `verifyRollResolution` check failed |
 | `Resolution ${i} references unknown state ${hash}...` | `declaration.gameHash` does not match any state in the chain |
-| `Resolution ${i} has sides ${sides}, expected ${expected}` | The state referenced by `gameHash` has a different `sides` than `expectedSides` |
+| `Resolution ${i} has sides ${sides}, expected ${expectedSides}` | The state referenced by `gameHash` has a different `sides` than `expectedSides` |
 
 > Pools are `Record<string, ClosedSecret[]>` keyed by author, containing all commitments ever published by that author (initial + any replenishments). Empty arrays are skipped. Consumption is tracked via `consumeSecrets`: consumed commitments move from `commitments[]` to `consumed[]` with the raw secret and roll id.
 >
 > Resolutions are self-contained — each `RollResolution` includes the full `RollDeclaration` and the `SecretReveal[]` in request order. This makes each resolution independently verifiable. The verifier calls `consumeSecrets` only for passing resolutions.
+
+#### `lookupSides(states, stateHash)`
+
+| Error message | When |
+|---|---|
+| `State ${hash}... not found in chain` | No state with the given hash exists in the chain |
+| `State ${hash}... does not define sides` | The state exists but has no `sides` field |
+| `State ${hash}... sides must be a finite integer >= 2 and <= 2^48, got ${val}` | The state's `sides` is invalid (NaN, Infinity, <2, or >2^48) |
 
 ### Design Decisions
 
@@ -364,7 +375,7 @@ Proposed new event kinds (e.g., 31000-31099 for games):
 Relevant tags:
 - `e`: parent event reference (state chain)
 - `p`: participant pubkeys
-- `fingerprint`: SHA256 hash of `(seed + author + seq_id + secret)` (hex)
+- `fingerprint`: `taggedHash("urd-commit/v1", seed, author, seqId, secret)` (hex)
 - `seq_id`: sequence number within an author's secret pool (integer)
 - `roll`: dice type and result (e.g., "d20:15")
 
@@ -386,7 +397,7 @@ Relevant tags:
      `SecretReveal`, `verifySecretReveal`, `verifyRollDeclaration`)
    - [x] Roll resolution with multi-secret derivation (`RollResolution`,
      `resolveRoll`, `verifyRollResolution`)
-   - [x] State lookup in chain (`findStateInChain`)
+   - [x] State lookup in chain (`findStateInChain`, `lookupSides`)
    - [x] Composite game verification (`verifyGame`)
    - [x] Security tests (determinism, multi-secret non-predictability,
      distribution uniformity, non-reusability)
