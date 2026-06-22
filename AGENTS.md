@@ -42,3 +42,4 @@ urd/
 - Before editing, read the file first
 - After making changes, compile and run tests to verify
 - Keep PRs/commits small and focused
+- When upgrading dependencies, always look up the current versions online (npm registry, Node.js releases page) instead of relying on internal knowledge — my training data may be stale
