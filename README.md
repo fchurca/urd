@@ -1,10 +1,10 @@
 # URD: URD's Roll Derivation
 
-A Verifiable Randomness Protocol for Decentralized "Play-by-Nostr" Games
+A Verifiable Randomness Protocol for Decentralized Turn-Based Games
 
 **Status:** proof-of-concept — state chain, secret pool, roll declaration/reveal/resolution,
-and full game verification implemented. Nostr bindings and demo client are
-planned but not yet built.
+and full game verification implemented. Nostr bindings and a demo game client
+are planned but not yet built.
 
 **URD** 🔮 (pronounced "urd") shares its name with [Urðr](https://en.wikipedia.org/wiki/Ur%C3%B0r),
 one of the Norns who weave the threads of fate in Norse mythology — fitting for a protocol
@@ -20,7 +20,7 @@ License: see [LICENSE](./LICENSE) file (BSD 2-Clause).
 ## Problem
 
 In peer-to-peer multiplayer games without a central server (e.g., play-by-mail
-over Nostr), trust in randomness is the weak link. "I rolled a natural 20,
+over Nostr, email, or any async transport), trust in randomness is the weak link. "I rolled a natural 20,
 trust me bro" is not verifiable. Casino provably-fair schemes require a
 central server. On-chain commit-reveal requires blocks and synchronous timing.
 VRFs and randomness beacons require external infrastructure.
@@ -28,14 +28,14 @@ VRFs and randomness beacons require external infrastructure.
 ## Goal
 
 Design and implement a protocol for verifiable random outcomes in tabletop
-games over Nostr, with these properties:
+games over any async transport, with these properties:
 
 - **Asynchronous**: players respond in hours/days, no rounds or deadlines
 - **Shared-nothing**: no central server, no specialized relay, no blockchain
 - **Deterministic and verifiable**: given the game state and committed secrets,
   anyone can replay and verify every result
 - **Farm-resistant**: a player cannot choose which secret to reveal; abort (forfeit) is detectable
-- **Identity via pubkey**: uses existing Nostr keys for signing and authentication
+- **Identity via public key**: uses existing keypairs (e.g., Nostr keys) for signing and authentication
 
 At a physical table, trust in randomness is shared: you prepare the dice cup,
 another player rolls, and everyone sees the result. URD replicates this
@@ -62,8 +62,9 @@ public game state.
    (the seed is part of the hash). All commitments in a pool share the same
    seed — `createPool` and `addToPool` enforce this.
 
-2. **Game state chain**: linked Nostr events where each state references the
-   previous one (event `e` tag).
+2. **Game state chain**: a reverse-linked list where each state references the
+   previous one by its hash (the transport layer is responsible for
+   delivering states in order).
 
 3. **Roll declaration**: a player declares intent to roll N dice by publishing
    a `RollDeclaration` containing the game state hash (salt) and a list of
@@ -83,23 +84,23 @@ public game state.
 
 ### Flow
 
-Phase 0 — Setup: GM publishes kind:XXXXX with rules + their fingerprint pool.
-Each player responds with kind:XXXXX adding their own pool. All commitments
-are live from publication onward — new ones can be appended at any time.
+Phase 0 — Setup: GM publishes rules + their fingerprint pool. Each player
+responds adding their own pool. All commitments are live from publication
+onward — new ones can be appended at any time.
 
-Phase 1 — Roll declaration: Player A publishes kind:XXXXX "roll declaration"
-with a `RollDeclaration` containing `gameHash` (the current game state hash),
-`sides`, and a list of `SecretRequest`s. Each request identifies a pool
-commitment by author, seqId, and fingerprint. A can request their own
-commitments (self-draw, delayed reveal) or any other player's (public roll).
-Multiple requests = multi-source (no party can predict alone).
+Phase 1 — Roll declaration: A player publishes a `RollDeclaration` containing
+`gameHash` (the current game state hash), `sides`, and a list of
+`SecretRequest`s. Each request identifies a pool commitment by author, seqId,
+and fingerprint. A player can request their own commitments (self-draw,
+delayed reveal) or any other player's (public roll). Multiple requests =
+multi-source (no party can predict alone).
 
-Phase 2 — Secret reveal: Each requested secret's owner publishes kind:XXXXX
-"secret reveal" with the raw secret. Reveals reference fingerprints, not
-positions — they can arrive in any order and at any time.
+Phase 2 — Secret reveal: Each requested secret's owner publishes the raw
+secret. Reveals reference fingerprints, not positions — they can arrive in
+any order and at any time.
 
 Phase 3 — Roll resolution: Once all requested secrets are revealed, anyone
-publishes kind:XXXXX "roll resolution" with the computed result. The roll is
+publishes the computed result. The roll is
 `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + b64(s2) + ...)` mapped to
 the requested range via rejection sampling. The verifier consumes the revealed
 secrets (removes from `commitments[]`, appends to `consumed[]`) to enforce
@@ -124,8 +125,8 @@ reveal event. A peer's secret can be requested the same way for the same
 purpose; the protocol does not care who owns the secret.
 
 **Private draws from shared decks** (e.g., a common pool of advancement cards
-drawn by multiple players without revealing the remaining deck) will be
-addressed in a future release using commutative primitives (Soon™).
+drawn by multiple players without revealing the remaining deck) is a known
+limitation — see [Known Limitations](#known-limitations).
 
 ### Multi-source Derivation (Bias Prevention)
 
@@ -158,7 +159,6 @@ import {
   createGenesisState, deriveRoll,
   addToPool, verifySecretReveal, verifyRollDeclaration,
   verifyRollResolution, resolveRoll, verifyGame,
-  consumeSecrets,
 } from "urd";
 import type {
   RollDeclaration, SecretReveal, SecretRequest, RollResolution,
@@ -203,16 +203,43 @@ const result = verifyGame(
 console.log(result.valid); // true
 ```
 
+### Reimplementing
+
+The protocol uses only SHA-256 via the BIP-340 tagged hash construction:
+
+```
+SHA256(SHA256(tag) ++ SHA256(tag) ++ msg)
+```
+
+The TypeScript implementation in this repository is a **reference
+implementation** — the protocol is designed to be reimplemented in any
+language with a SHA-256 library. Readers are welcome and encouraged to
+write implementations in Python, Go, C, Common Lisp, or any other language.
+
+Three distinct domain tags are used for domain separation:
+
+| Construction | Tag | Used for |
+|---|---|---|
+| `taggedHash("urd-commit/v1", seed, author, seqId, secret)` | `urd-commit/v1` | Commitment fingerprints |
+| `taggedHash("urd-state/v1", data, prevHash, timestamp, sides?)` | `urd-state/v1` | Game state hashes |
+| `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + ...)` | `urd-roll/v1` | Roll derivation |
+
+All hash comparisons use string equality (`===`). The roll derivation uses
+rejection sampling on 48-bit extracts from the hash output. Maximum sides
+value is `2^48` (281,474,976,710,656).
+
 ### Security Properties
 
 - **No farming**: the declaration names specific fingerprints before any secret
   is revealed. The declarer cannot change the request list after seeing
   outcomes. Committing to a set of fingerprints upfront eliminates secret
-  selection after the fact.
+  selection after the fact. This means a player cannot choose *which* secret
+  to reveal — abort (refuse to reveal) is detectable as a forfeit.
 - **Multi-source by construction**: a roll declaration can request any number
   of secrets from any players. With N≥2 independent parties, no single party
   can predict or abort-bias the outcome. Single-source rolls (N=1) are
-  detectable as a game-level choice.
+  detectable as a game-level choice — game implementors have the traceable
+  opportunity to require multi-source rolls if they want bias resistance.
 - **No prediction**: the game state hash is unknown until published, and the
   secrets are unknown until revealed.
 - **One-shot commitment**: the fingerprint pool is published before any game
@@ -226,13 +253,34 @@ console.log(result.valid); // true
   revealed. The declarer can authorize a third party to resolve ("I toss, you
   reveal").
 - **Timing-safe comparisons**: hash comparisons use string equality (`===`).
-  The protocol targets turn-based games over Nostr where each round takes
-  seconds or hours — microsecond timing leaks are irrelevant to the threat
-  model.
-- **Verifiable in a shared log**: URD assumes a shared event log (e.g., a Nostr
-  relay) visible to all participants. The protocol does not provide byzantine
-  fault-tolerant consensus; fork detection requires relay-level deduplication or
-  social coordination between participants.
+  The protocol targets turn-based games where each round takes seconds or
+  hours — microsecond timing leaks are irrelevant to the threat model.
+- **Verifiable in a shared log**: URD assumes a shared, ordered event log
+  visible to all participants. The protocol does not provide byzantine
+  fault-tolerant consensus; fork detection is delegated to the transport layer.
+
+#### Fork Handling
+
+URD assumes a total order of events. If the transport delivers events in
+different orders to different participants (a fork), the protocol cannot
+determine which fork is canonical. This is a deliberate scope boundary:
+
+- URD verifies chain integrity — if a state's `prevHash` does not match the
+  previous state, `verifyChain` rejects it.
+- URD does not resolve forks. Two contradictory states at the same position
+  in the chain are both rejected by the integrity check; the transport layer
+  must decide which event is authoritative.
+- Fork detection and resolution are the responsibility of the transport
+  (e.g., a Nostr relay with deduplication, email threading rules, or social
+  agreement among participants).
+- An attacker who controls the transport can create forks. Mitigations
+  include using multiple independent transports, relays with storage
+  guarantees, or a transport that enforces total order (e.g., a blockchain,
+  if you must).
+
+As long as all participants see the same ordered event log, URD's
+cryptographic guarantees hold. The protocol makes the fork problem
+transparent rather than solving it.
 
 ### Verification Reference
 
@@ -290,7 +338,6 @@ table below documents every rejection reason across the API.
 |---|---|
 | `Reveal author does not match pool author` | A reveal targets a different author than the pool |
 | `Fingerprint ${fp}... does not match next unconsumed commitment for ${author}` | A reveal's fingerprint does not match `commitments[0]` (either wrong secret or commitment was already consumed) |
-| `Index ${i} out of bounds` | More reveals than remaining commitments in the pool |
 
 #### `verifyGame(states, commitmentMaps, resolutions, expectedSides?)`
 
@@ -333,17 +380,23 @@ table below documents every rejection reason across the API.
   `consumeSecrets`. Each consumed commitment is removed from `commitments[]`
   and pushed to `consumed[]` with the raw secret and roll id. The verifier
   advances pool state only for passing resolutions. FIFO order within each
-  pool is enforced naturally — you always consume from the front of the array.
+  pool is enforced naturally — you always consume from the front of the
+  array. As a result, the same commitment fingerprint can never be used
+  twice: once consumed, a second request for the same fingerprint will
+  find it missing from the front of the pool and fail verification.
 - **Delegated resolution**: `resolveRoll` is a pure computation. Anyone
   with the declaration and reveals can compute the result. This enables
   patterns like "I toss the die and you reveal it."
 - **Secret entropy**: secrets must have sufficient entropy to prevent
-  brute-force prediction of the fingerprint. The library does not enforce a
-  minimum entropy — it is the caller's responsibility to generate strong
-  secrets (at least 128 bits, e.g., 32 hex characters from a CSPRNG). Never
-  use guessable values like dictionary words or short strings. Multi-source
-  rolls mitigate weak secrets because the attacker would need to brute-force
-  *all* secrets simultaneously.
+  brute-force prediction of the fingerprint. The library takes secrets as
+  arbitrary strings with no maximum length — use completely random strings
+  (the longer the better). Generate from a CSPRNG: 32+ hex characters, a
+  UUID, or an even longer passphrase. Multi-source rolls mitigate weak
+  secrets because the attacker would need to brute-force *all* secrets
+  simultaneously.
+- **Maximum sides**: the protocol supports dice with up to 2^48
+  (281,474,976,710,656) faces, defined as `MAX_SIDES` in the reference
+  implementation.
 
 ### Repudiation
 
@@ -353,18 +406,38 @@ may exploit:
 
 | Opportunity | Risk | Mitigation |
 |---|---|---|
-| **Future timestamp** — player publishes a state with `timestamp` far in the future | If the game turns unfavorable, the player can claim their clock was wrong and repudiate the state as invalid | Use the median of several relay-observed timestamps; reject timestamps more than N hours ahead of relay time |
+| **Future timestamp** — player publishes a state with `timestamp` far in the future | If the game turns unfavorable, the player can claim their clock was wrong and repudiate the state as invalid | Use median of multiple observed timestamps; reject timestamps more than N hours ahead of reference time |
 | **Late reveal** — player does not reveal for a requested secret within a reasonable window | The player can observe others' moves before deciding whether to reveal; if unfavorable, they can stay silent | Forfeit (loss of turn or game); the roll remains unresolved and the declarer can abort it |
-| **Missing request** — no one requests a player's secret in time | A player could sit on their secret indefinitely | A consensus round or relay-enforced deadline; the secret expires if unused after N events |
-| **Clock disagreement** — two relays see different timestamps for the same event | Ambiguity about which state is canonical and which timestamps to use in hash derivation | Use relay-observed time (not event timestamp) for ordering; event timestamp is only used for hash binding |
+| **Missing request** — no one requests a player's secret in time | A player could sit on their secret indefinitely | A timeout enforced by social consensus or transport policy; the secret expires if unused after N events |
+| **Clock disagreement** — two observers see different timestamps for the same event | Ambiguity about which state is canonical and which timestamps to use in hash derivation | Use observed time (not event timestamp) for ordering; event timestamp is only used for hash binding |
 
 In a proof-of-concept or small game, these risks are tolerable. A production
 deployment should pick a concrete timeout (e.g., 7 days between challenge and
-reveal) enforced by social consensus or relay policy.
+reveal) enforced by social consensus or transport policy.
 
-### Nostr Implementation
+### Known Limitations
 
-Proposed new event kinds (e.g., 31000-31099 for games):
+- **Private draws from shared decks** (e.g., a common pool of advancement cards
+  drawn by multiple players without revealing the remaining deck): not yet
+  supported. A future release may address this using commutative primitives
+  (Soon™). For now, each player draws from their own pool (private) or draws
+  are fully revealed.
+- **Non-integer dice**: only integer-sided dice are supported (d2 through
+  d2^48). Fudge/Fate dice or weighted outcomes must be mapped to integer
+  ranges by the game client.
+- **Browser compatibility**: the reference implementation currently uses
+  Node.js `node:crypto` (provisional — may change). Browsers have the Web
+  Crypto API baked in (`crypto.subtle.digest("SHA-256", ...)`) which provides
+  the same SHA-256 primitive. A browser-compatible build is a matter of
+  baking in the right dependency — not yet done.
+
+### Nostr Binding (Proposed)
+
+URD was designed with Nostr in mind as a first-class transport — the protocol
+is Nostr-optional, Nostr-encouraged. Below is a proposed event kind mapping
+for Nostr-based games. Kind numbers are TBD pending NIP registration.
+
+Proposed event kinds (range 31000-31099):
 - Kind X: Game Definition (fingerprint pool + rules)
 - Kind X+1: Join Game (add own pool, or replenish)
 - Kind X+2: Game State (move + updated state)
@@ -402,8 +475,9 @@ Relevant tags:
    - [x] Security tests (determinism, multi-secret non-predictability,
      distribution uniformity, non-reusability)
 3. Articulate with [Vesta](https://github.com/fchurca/vesta) as a
-   demonstrator to showcase the protocol in a decentralized
-   settlement-building board game running on Nostr
+   work-in-progress demonstrator — a decentralized settlement-building
+   board game built on URD
 4. Private draws from shared decks using commutative primitives
-5. ???
-6. Profit!
+5. Formal protocol specification / whitepaper
+6. ???
+7. Profit!

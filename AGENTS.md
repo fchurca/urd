@@ -1,5 +1,10 @@
 # URD Project — Agent Instructions
 
+**Origin note:** this project was born in a hackathon, not in a sterile
+university lab. The code and docs carry that energy — rapid prototyping,
+async play, and a willingness to be opinionated. Keep the :tm:, keep the
+jokes, keep the urgency.
+
 ## Language
 
 Use English only unless explicitly asked otherwise.
