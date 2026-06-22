@@ -6,7 +6,7 @@ A cryptographic protocol that lets players roll dice over Nostr with publicly
 verifiable commitments — no server, no blockchain, no "trust me bro." Each
 player pre-commits to hashed secrets. To roll, a player declares which N
 secrets (their own or others') feed the result. Once all secrets are revealed,
-anyone resolves the roll: `SHA256(b64(state_hash) + ":" + b64(s1) + ":" + ...)`.
+anyone resolves the roll: `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + ...)`.
 Deterministic, publicly verifiable, delegated. Fully async, shared-nothing,
 identity via Nostr keys. Now in proof-of-concept.
 
@@ -14,20 +14,19 @@ identity via Nostr keys. Now in proof-of-concept.
 
 ### The Problem
 
-You're playing D&D over Nostr with friends. You need to roll a skill check.
-Who generates the random number? If you roll, nobody trusts the result. If
-the DM rolls, nobody trusts the DM. Provably-fair casino schemes need a
-central server. On-chain commit-reveal needs blocks and sync timing. VRFs
-need external infrastructure.
+You're playing a settlement-building board game over Nostr with friends. You
+need to roll for resources. Who generates the random number? If you roll,
+nobody trusts the result. If the host rolls, nobody trusts the host.
+Provably-fair casino schemes need a central server. On-chain commit-reveal
+needs blocks and sync timing. VRFs need external infrastructure.
 
 For peer-to-peer tabletop gaming, there is no simple, async, shared-nothing
 way to get verifiable randomness.
 
-At a physical table, trust is built by sharing custody: you shuffle the
-deck, another player cuts it, and everyone takes turns dealing. URD
-replicates this interaction digitally — lock in a shuffled pool of secrets,
-let anyone nominate which secrets to use, and derive the result from all of
-them.
+At a physical table, trust in randomness is shared: you prepare the dice cup,
+another player rolls, and everyone sees the result. URD replicates this
+interaction digitally — lock in a pool of secrets, let anyone nominate which
+ones feed the roll, and derive the outcome from all of them.
 
 ### The Solution
 
@@ -35,13 +34,13 @@ URD (URD's Roll Derivation) is a minimal protocol built on three ideas:
 
 1. **Pre-committed secrets**: each player publishes a pool of `ClosedSecret`
    fingerprints `(author, seq_id, seed, fingerprint)` where
-   `fingerprint = hash(seed + author + seq_id + secret)`. New commitments can
+   `fingerprint = taggedHash("urd-commit/v1", seed, author, seqId, secret)`. New commitments can
    be appended at any time.
 2. **Roll declaration**: a player publishes a `RollDeclaration` naming the
    game state hash and which fingerprints (from any player's pool) will feed
    the roll. Anyone can request any existing fingerprint.
 3. **Multi-secret derivation**: once all named secrets are revealed, the
-   roll is `SHA256(b64(gameHash) + ":" + b64(s1) + ":" + ...)` with rejection
+   roll is `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + ...)` with rejection
    sampling — deterministic given the state, unpredictable until all secrets
    are known. With N≥2 independent parties, no single party can predict or
    abort-bias the outcome.

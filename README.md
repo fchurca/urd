@@ -28,7 +28,7 @@ VRFs and randomness beacons require external infrastructure.
 ## Goal
 
 Design and implement a protocol for verifiable random outcomes in tabletop
-games (dice rolls, card draws, etc.) over Nostr, with these properties:
+games over Nostr, with these properties:
 
 - **Asynchronous**: players respond in hours/days, no rounds or deadlines
 - **Shared-nothing**: no central server, no specialized relay, no blockchain
@@ -37,11 +37,11 @@ games (dice rolls, card draws, etc.) over Nostr, with these properties:
 - **Farm-resistant**: a player cannot choose which secret to reveal; abort (forfeit) is detectable
 - **Identity via pubkey**: uses existing Nostr keys for signing and authentication
 
-At a physical table, trust in randomness is solved by sharing custody: you
-shuffle the deck, another player cuts it, and everyone takes turns dealing.
-URD replicates this interaction digitally — each player locks in a shuffled
-pool of secrets, a peer cuts by selecting which one to reveal, and the
-result is dealt using the public game state.
+At a physical table, trust in randomness is shared: you prepare the dice cup,
+another player rolls, and everyone sees the result. URD replicates this
+interaction digitally — each player locks in a pool of secrets, a peer
+nominates which ones feed the roll, and the outcome is derived from the
+public game state.
 
 ## Proposed Design
 
@@ -118,7 +118,7 @@ FIFO ordering and prevent reuse.
 **Hidden information / private draws:** A player publishes a roll declaration
 naming their own commitment. They reveal privately (keep the reveal event
 off-chain), compute the roll, and only publish the resolution later when
-the hidden information must be revealed (e.g., playing a drawn card). No
+the hidden information must be revealed (e.g., playing a development card in a settlement builder). No
 extra encryption needed — hiding is achieved by delaying publication of the
 reveal event. A peer's secret can be requested the same way for the same
 purpose; the protocol does not care who owns the secret.
