@@ -217,7 +217,7 @@ card, and publicly reveal it:
 
 ```ts
 import {
-  DECK_SAFE_PRIME, generateKeypair, bigintToBase64,
+  DECK_SAFE_PRIME, generateKeypair, bigintToBase64, base64ToBigint,
   createInitialDeck, shuffleDeck, encryptDeck, hashDeck,
   drawCard, revealCard, createKeyCommitment, createDrawCommitment,
   verifyDeckDeclaration, verifyDeckShuffle, verifyDraw,
@@ -455,10 +455,11 @@ table below documents every rejection reason across the API.
 | Error message | When |
 |---|---|
 | `Secret author does not match expected author` | A reveal targets a different author than the pool |
-| `Fingerprint ${fp}... does not match next unconsumed commitment for ${author}` | A reveal's fingerprint does not match `commitments[0]` (either wrong secret or commitment was already consumed) |
-| ... | (same as `verifyRollDeclaration` — includes expected fingerprint in parentheses) |
+| `Fingerprint ${fp}... does not match next unconsumed commitment for ${author} (expected ${fp}...)` | A reveal's fingerprint does not match `commitments[0]` — either wrong secret or already consumed |
 
 #### `verifyGame(states, commitmentMaps, resolutions, expectedSides?)`
+
+Returns `VerifyGameResult { valid: boolean, errors: string[] }`.
 
 | Error message | When |
 |---|---|
@@ -589,6 +590,14 @@ interface CardReveal {
   partials: PartialReveal[];
 }
 ```
+
+**SRA primitives (for custom deck operations):**
+
+- `encrypt(value, key, prime)` — modular exponentiation `value^key mod prime`
+- `decrypt(value, key, prime)` — same operation (SRA is commutative: encrypt = decrypt)
+- `generateKeypair(prime)` — returns `{e, d}` such that `(e * d) ≡ 1 mod (prime-1)`
+- `bigintToBase64(n)` — bigint to unpadded base64
+- `base64ToBigint(s)` — base64 to bigint
 
 **Deck functions:**
 

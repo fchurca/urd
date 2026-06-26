@@ -130,6 +130,99 @@ describe("Deck creation", () => {
     };
     throws(() => verifyDeckShuffle(event, "", emptyMap));
   });
+
+  it("verifyDeckShuffle rejects wrong input hash", () => {
+    const deckId = "test-deck";
+    const kc: KeyCommitment = { author: "alice", deckId, commitment: "c1" };
+    const map = new Map<string, KeyCommitment>([["alice", kc]]);
+    const event: DeckShuffle = {
+      deckId,
+      author: "alice",
+      inputDeckHash: "abc",
+      outputDeck: ["x"],
+      keyCommitment: "c1",
+    };
+    throws(() => verifyDeckShuffle(event, "def", map));
+  });
+
+  it("verifyDeckShuffle rejects empty output deck", () => {
+    const deckId = "test-deck";
+    const kc: KeyCommitment = { author: "alice", deckId, commitment: "c1" };
+    const map = new Map<string, KeyCommitment>([["alice", kc]]);
+    const event: DeckShuffle = {
+      deckId,
+      author: "alice",
+      inputDeckHash: "",
+      outputDeck: [],
+      keyCommitment: "c1",
+    };
+    throws(() => verifyDeckShuffle(event, "", map));
+  });
+
+  it("verifyDeckShuffle rejects duplicate ciphertexts", () => {
+    const deckId = "test-deck";
+    const kc: KeyCommitment = { author: "alice", deckId, commitment: "c1" };
+    const map = new Map<string, KeyCommitment>([["alice", kc]]);
+    const event: DeckShuffle = {
+      deckId,
+      author: "alice",
+      inputDeckHash: "",
+      outputDeck: ["a", "a"],
+      keyCommitment: "c1",
+    };
+    throws(() => verifyDeckShuffle(event, "", map));
+  });
+
+  it("verifyDeckShuffle rejects key commitment mismatch", () => {
+    const deckId = "test-deck";
+    const kc: KeyCommitment = { author: "alice", deckId, commitment: "real-commitment" };
+    const map = new Map<string, KeyCommitment>([["alice", kc]]);
+    const event: DeckShuffle = {
+      deckId,
+      author: "alice",
+      inputDeckHash: "",
+      outputDeck: ["x"],
+      keyCommitment: "fake-commitment",
+    };
+    throws(() => verifyDeckShuffle(event, "", map));
+  });
+
+  it("verifyDeckShuffle rejects deckId mismatch", () => {
+    const kc: KeyCommitment = { author: "alice", deckId: "deck-a", commitment: "c1" };
+    const map = new Map<string, KeyCommitment>([["alice", kc]]);
+    const event: DeckShuffle = {
+      deckId: "deck-b",
+      author: "alice",
+      inputDeckHash: "",
+      outputDeck: ["x"],
+      keyCommitment: "c1",
+    };
+    throws(() => verifyDeckShuffle(event, "", map));
+  });
+});
+
+describe("Other verifier rejections", () => {
+  it("verifyDraw rejects card not at front", () => {
+    throws(() => verifyDraw(["a", "b", "c"], "b"));
+  });
+
+  it("verifyKeyCommitment rejects wrong nonce", () => {
+    const kc = createKeyCommitment("alice", "d1", 3n, "real-nonce");
+    throws(() => verifyKeyCommitment(kc, 3n, "wrong-nonce"));
+  });
+
+  it("verifyCardReveal rejects empty partials", () => {
+    const drawCommit: DrawCommitment = { deckId: "d1", player: "alice", ciphertext: "x", nonce: "n", commitment: "ignored" };
+    const reveal: CardReveal = { deckId: "d1", drawCommitment: drawCommit, card: 5, partials: [] };
+    throws(() => verifyCardReveal(reveal, new Map(), p));
+  });
+
+  it("verifyCardReveal rejects partial reveal deckId mismatch", () => {
+    const drawCommit: DrawCommitment = { deckId: "d1", player: "alice", ciphertext: "x", nonce: "n", commitment: "ignored" };
+    const partials: PartialReveal[] = [{ deckId: "d2", drawCiphertext: "x", author: "alice", e: bigintToBase64(3n), d: bigintToBase64(7n), nonce: "n" }];
+    const reveal: CardReveal = { deckId: "d1", drawCommitment: drawCommit, card: 5, partials };
+    throws(() => verifyCardReveal(reveal, new Map(), p));
+  });
 });
 
 describe("3-party deck creation", () => {

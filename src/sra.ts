@@ -46,13 +46,9 @@ export function generateKeypair(prime: bigint): { e: bigint; d: bigint } {
   return { e, d };
 }
 
-export function encrypt(value: bigint, key: bigint, prime: bigint): bigint {
-  return modPow(value, key, prime);
-}
+export const encrypt = modPow;
 
-export function decrypt(value: bigint, key: bigint, prime: bigint): bigint {
-  return modPow(value, key, prime);
-}
+export const decrypt = encrypt;
 
 export function bigintToBase64(n: bigint): string {
   if (n === 0n) return "AA==";
