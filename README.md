@@ -115,6 +115,12 @@ FIFO ordering and prevent reuse.
 6. `consumeSecrets(pool, rollId, reveals)` — move revealed commitments to consumed
 7. `verifyGame(states, commitmentMaps, resolutions, expectedSides?)` — full game replay
 8. `lookupSides(states, stateHash)` — look up the sides value for a state hash
+9. `verifyDeckDeclaration(decl)` — deck declaration validity
+10. `verifyDeckShuffle(event, inputDeckHash, deckKeyCommitments)` — shuffle integrity
+11. `verifyDraw(deck, drawCiphertext)` — FIFO draw position
+12. `verifyDrawCommitment(commit, ciphertext, player, nonce)` — draw commitment hash
+13. `verifyKeyCommitment(commit, e, nonce)` — key commitment hash
+14. `verifyCardReveal(reveal, deckKeyCommitments, prime)` — revealed card correctness
 
 **Hidden information / private draws:** A player publishes a roll declaration
 naming their own commitment. They reveal privately (keep the reveal event
@@ -124,9 +130,9 @@ extra encryption needed — hiding is achieved by delaying publication of the
 reveal event. A peer's secret can be requested the same way for the same
 purpose; the protocol does not care who owns the secret.
 
-**Private draws from shared decks** (e.g., a common pool of advancement cards
-drawn by multiple players without revealing the remaining deck) is handled by
-the [Deck Protocol](#shared-hidden-decks-sra-protocol) below, using
+**Private draws from shared decks** (e.g., a shared deck of cards drawn by
+multiple players without revealing the remainder to each other) is handled
+by the [Deck Protocol](#shared-hidden-decks-sra-protocol) below, using
 commutative encryption (SRA).
 
 ### Multi-source Derivation (Bias Prevention)
@@ -204,6 +210,107 @@ const result = verifyGame(
 console.log(result.valid); // true
 ```
 
+### Quick Start (Deck)
+
+A complete deck lifecycle — create, shuffle/encrypt with 3 parties, draw a
+card, and publicly reveal it:
+
+```ts
+import { DECK_SAFE_PRIME, generateKeypair, bigintToBase64, base64ToBigint }
+  from "urd/src/sra.ts";
+import {
+  createInitialDeck, shuffleDeck, encryptDeck, hashDeck,
+  drawCard, revealCard, createKeyCommitment, createDrawCommitment,
+  verifyDeckDeclaration, verifyDeckShuffle, verifyDraw,
+  verifyCardReveal,
+} from "urd/src/deck.ts";
+import type {
+  DeckDeclaration, DeckShuffle, KeyCommitment, DrawCommitment,
+  CardReveal, PartialReveal,
+} from "urd/src/deck.ts";
+
+const p = DECK_SAFE_PRIME;
+const deckId = "game-1";
+const players = ["alice", "bob", "carol"];
+
+// Deck declaration
+const declaration: DeckDeclaration = {
+  deckId,
+  prime: bigintToBase64(p),
+  participants: players,
+  cardCount: 52,
+};
+verifyDeckDeclaration(declaration);
+
+// Each participant generates a keypair and commits to their public key
+const keyCommitments = new Map<string, KeyCommitment>();
+const keypairs = new Map<string, { e: bigint; d: bigint }>();
+const nonces = new Map<string, string>();
+for (const player of players) {
+  const kp = generateKeypair(p);
+  keypairs.set(player, kp);
+  const nonce = Math.random().toString(36).slice(2);
+  nonces.set(player, nonce);
+  const kc = createKeyCommitment(player, deckId, kp.e, nonce);
+  keyCommitments.set(player, kc);
+}
+
+// Each participant shuffles and encrypts in sequence
+let currentDeck = createInitialDeck(52);
+let prevHash = "";
+for (const player of players) {
+  const kp = keypairs.get(player)!;
+  currentDeck = shuffleDeck(currentDeck);
+  currentDeck = encryptDeck(currentDeck, kp.e, p);
+  const deckHash = hashDeck(currentDeck);
+  const event: DeckShuffle = {
+    deckId, author: player, inputDeckHash: prevHash,
+    outputDeck: currentDeck.map(c => bigintToBase64(c)),
+    keyCommitment: keyCommitments.get(player)!.commitment,
+  };
+  verifyDeckShuffle(event, prevHash, keyCommitments);
+  prevHash = deckHash;
+}
+
+// Alice draws the first card
+const { card: ciphertext } = drawCard(currentDeck);
+const ctB64 = bigintToBase64(ciphertext);
+verifyDraw(currentDeck.map(c => bigintToBase64(c)), ctB64);
+
+// Alice publishes a draw commitment
+const drawNonce = Math.random().toString(36).slice(2);
+const drawCommit = createDrawCommitment(deckId, "alice", ctB64, drawNonce);
+
+// Later, Alice reveals the card publicly.
+// Each participant publishes their (e, d, nonce) in a PartialReveal:
+const partialReveals: PartialReveal[] = players.map(player => ({
+  deckId,
+  drawCiphertext: ctB64,
+  author: player,
+  e: bigintToBase64(keypairs.get(player)!.e),
+  d: bigintToBase64(keypairs.get(player)!.d),
+  nonce: nonces.get(player)!,
+}));
+
+// Alice decrypts the card with all d values
+const allD = players.map(player => keypairs.get(player)!.d);
+const cardValue = revealCard(ciphertext, allD, p);
+
+// Anyone can verify the public reveal
+const cardReveal: CardReveal = {
+  deckId,
+  drawCommitment: drawCommit,
+  card: Number(cardValue),
+  partials: partialReveals,
+};
+verifyCardReveal(cardReveal, keyCommitments, p);
+console.log(`Card revealed: ${cardValue}`);
+
+> **Note:** the `nonce` in `PartialReveal` must be the **same nonce** used
+> when the participant created their `KeyCommitment`. The verifier checks
+> `taggedHash("urd-key/v1", b64(e), nonce)` against the stored commitment,
+> so a different nonce would fail verification.
+
 ### Reimplementing
 
 The protocol uses only SHA-256 via the BIP-340 tagged hash construction:
@@ -217,7 +324,7 @@ implementation** — the protocol is designed to be reimplemented in any
 language with a SHA-256 library. Readers are welcome and encouraged to
 write implementations in Python, Go, C, Common Lisp, or any other language.
 
-Three distinct domain tags are used for domain separation:
+The following domain tags are used for domain separation:
 
 | Construction | Tag | Used for |
 |---|---|---|
@@ -231,6 +338,14 @@ Three distinct domain tags are used for domain separation:
 All hash comparisons use string equality (`===`). The roll derivation uses
 rejection sampling on 48-bit extracts from the hash output. Maximum sides
 value is `2^48` (281,474,976,710,656).
+
+**Deck protocol primitives:** the deck extension requires modular exponentiation
+(`x^y mod p`) and modular inverse (`e^{-1} mod (p-1)`) over a safe prime group.
+The reference uses the 2048-bit MODP group #14 from RFC 3526 as `DECK_SAFE_PRIME`.
+Encryption and decryption are the same operation: `E(x, k) = x^k mod p`.
+Key generation picks a random odd `e > 2` and computes `d = e^{-1} mod (p-1)`.
+Bigint values are serialized as unpadded base64 of their big-endian hex
+representation.
 
 ### Security Properties
 
@@ -367,9 +482,8 @@ table below documents every rejection reason across the API.
 
 ### Shared Hidden Decks (SRA Protocol)
 
-The deck protocol enables a shared deck (e.g., a common pool of advancement
-cards) where multiple players can draw privately without revealing the
-remaining deck to each other. It uses the
+The deck protocol enables a shared deck where multiple players can draw
+privately without revealing the remaining deck to each other. It uses the
 [Shamir-Rivest-Adleman](https://en.wikipedia.org/wiki/Shamir%27s_three-pass_protocol)
 (SRA) three-pass protocol with commutative encryption over a safe prime group.
 
@@ -401,27 +515,31 @@ range from `2` to `cardCount + 1`.
    ciphertext deck, and publishes a `DeckShuffle` with the `outputDeck` and
    the `inputDeckHash` (hash of the deck before their turn).
 
-4. **Draw**: to draw a card, a player takes the front ciphertext from the
-   current deck, publishes a `DrawCommitment` binding the ciphertext to their
-   identity, and privately requests each other participant's `d` value. With
-   all `d` values, they decrypt the ciphertext to learn the card.
+4. **Draw**: to draw a card, a player publishes a `DrawCommitment` binding
+   the front ciphertext to their identity. They then obtain each other
+   participant's `d` value — either privately (out-of-band, for hidden
+   draws) or from a `PartialReveal` event (when the card must later become
+   public). With all `d` values, `revealCard(ciphertext, keysD, prime)`
+   decrypts the card locally.
 
-5. **Public Card Reveal**: when a drawn card must be revealed publicly (e.g.,
-   played in the game), each participant publishes a `PartialReveal` with
-   their `(e, d, nonce)`. The verifier checks:
+5. **Public Card Reveal**: when the drawn card must be revealed publicly
+   (e.g., played in the game), each participant publishes a `PartialReveal`
+   with their `(e, d, nonce)`. The verifier checks:
    - The draw commitment matches the published ciphertext
    - Each `(e, nonce)` matches the participant's original `KeyCommitment`
    - `(e * d) ≡ 1 mod (p-1)`
    - Applying all `d` values to the ciphertext yields the claimed card
 
 **Lazy, per-card verification:** cards are only verified when they become
-public. Unopened cards in the deck are never verified — trust is deferred to
-game end or until the card is played.
+public. At game end, all participants can reveal their keys and every drawn
+card can be verified from the published events.
 
 **Important caveat:** once any card is publicly revealed, all participants'
-private keys `d` are disclosed. Anyone can decrypt the remaining deck. Cards
-drawn privately before the reveal remain private only until their draw
-commitment is also publicly revealed.
+private keys `d` are disclosed. Anyone can then decrypt **every** ciphertext
+in the deck, including those drawn privately earlier (whose ciphertexts are
+already public in their `DrawCommitment` events). The only protection is
+timing: a card drawn and played before any key revelation stays hidden until
+that moment.
 
 **Deck types:**
 
@@ -571,6 +689,21 @@ interface CardReveal {
 - **Maximum sides**: the protocol supports dice with up to 2^48
   (281,474,976,710,656) faces, defined as `MAX_SIDES` in the reference
   implementation.
+- **SRA for shared decks**: commutative encryption (SRA) was chosen over
+  cut-and-choose or ZK proofs because it enables private draws with a single
+  message per participant per round. The deferred verification model (keys are
+  revealed only when a card becomes public) keeps the setup phase lightweight
+  — no interactive proofs needed at shuffle time.
+- **Offset by +2**: deck values start at 2 instead of 0 or 1 because `0^e ≡ 0`
+  and `1^e ≡ 1` for any exponent. These fixed points would leak information
+  about the card value through the ciphertext. Offsetting also eliminates the
+  need to handle 0-values in the game logic (card 0 is unused).
+- **Per-card key revelation**: each `PartialReveal` carries a participant's
+  full private key `d` for that deck. This means any public card reveal
+  discloses all keys — the remaining deck becomes decryptable by anyone. This
+  is a deliberate tradeoff: layout verification is simple (no ZK), and cards
+  that were privately drawn before the reveal remain private until their draw
+  commitment is also revealed.
 
 ### Repudiation
 
@@ -618,6 +751,11 @@ Proposed event kinds (range 31000-31099):
 - Kind X+3: Roll Declaration (intent to roll, names N secrets)
 - Kind X+4: Secret Reveal (reveal a single secret for one fingerprint)
 - Kind X+5: Roll Resolution (computed result, published by declarer or delegate)
+- Kind X+6: Deck Declaration (deck creation with prime, participants, card count)
+- Kind X+7: Deck Shuffle (shuffle + encrypt step by one participant)
+- Kind X+8: Key Commitment (public key commitment for a deck)
+- Kind X+9: Draw Commitment (ciphertext drawn from deck)
+- Kind X+10: Card Reveal (public reveal of a drawn card with partial keys)
 
 Relevant tags:
 - `e`: parent event reference (state chain)
@@ -625,6 +763,9 @@ Relevant tags:
 - `fingerprint`: `taggedHash("urd-commit/v1", seed, author, seqId, secret)` (hex)
 - `seq_id`: sequence number within an author's secret pool (integer)
 - `roll`: dice type and result (e.g., "d20:15")
+- `deck`: deck identifier (string)
+- `draw`: draw commitment hash (hex)
+- `card`: the claimed card value (integer)
 
 ## Tasks
 
