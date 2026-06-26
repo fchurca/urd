@@ -446,16 +446,17 @@ table below documents every rejection reason across the API.
 | (propagated from `verifyRollDeclaration`) | Declaration validation fails |
 | `Expected ${n} reveals, got ${m}` | Wrong number of reveals for the declared requests |
 | `Reveal ${i} fingerprint does not match request` | Reveal's fingerprint does not match the corresponding request |
-| `Reveal ${i} author does not match request` | Reveal's author does not match the corresponding request |
-| `Secret does not match fingerprint for reveal ${i}` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the reveal's fingerprint |
+| `Secret author does not match expected author` | `reveal.author` does not match the corresponding request |
+| `Secret does not match fingerprint` | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` does not match the reveal's fingerprint |
 | `Claimed roll does not match computed roll` | `deriveRoll(gameHash, secrets[], sides)` !== `resolution.roll` |
 
 #### `consumeSecrets(pool, rollId, reveals)`
 
 | Error message | When |
 |---|---|
-| `Reveal author does not match pool author` | A reveal targets a different author than the pool |
+| `Secret author does not match expected author` | A reveal targets a different author than the pool |
 | `Fingerprint ${fp}... does not match next unconsumed commitment for ${author}` | A reveal's fingerprint does not match `commitments[0]` (either wrong secret or commitment was already consumed) |
+| ... | (same as `verifyRollDeclaration` — includes expected fingerprint in parentheses) |
 
 #### `verifyGame(states, commitmentMaps, resolutions, expectedSides?)`
 

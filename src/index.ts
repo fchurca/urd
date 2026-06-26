@@ -216,9 +216,9 @@ export function consumeSecrets(pool: SecretPoolState, rollId: string, reveals: S
   const remaining = [...pool.commitments];
   const consumed = [...pool.consumed];
   for (const reveal of reveals) {
-    if (reveal.author !== pool.author) throw new Error("Reveal author does not match pool author");
+    if (reveal.author !== pool.author) throw new Error("Secret author does not match expected author");
     const commitment = at(remaining, 0);
-    if (reveal.fingerprint !== commitment.fingerprint) throw new Error(`Fingerprint ${reveal.fingerprint.slice(0, 8)}... does not match next unconsumed commitment for ${pool.author}`);
+    if (reveal.fingerprint !== commitment.fingerprint) throw new Error(`Fingerprint ${reveal.fingerprint.slice(0, 8)}... does not match next unconsumed commitment for ${pool.author} (expected ${commitment.fingerprint.slice(0, 8)}...)`);
     remaining.shift();
     consumed.push({
       seed: reveal.seed,
@@ -291,9 +291,9 @@ export function verifyRollResolution(resolution: RollResolution, pools: Record<s
     const req = at(declaration.requests, i);
     const reveal = at(reveals, i);
     if (reveal.fingerprint !== req.fingerprint) throw new Error(`Reveal ${i} fingerprint does not match request`);
-    if (reveal.author !== req.author) throw new Error(`Reveal ${i} author does not match request`);
+    if (reveal.author !== req.author) throw new Error("Secret author does not match expected author");
     const computed = taggedHash("urd-commit/v1", reveal.seed, reveal.author, reveal.seqId.toString(), reveal.secret);
-    if (computed !== reveal.fingerprint) throw new Error(`Secret does not match fingerprint for reveal ${i}`);
+    if (computed !== reveal.fingerprint) throw new Error("Secret does not match fingerprint");
   }
   const computedRoll = deriveRoll(declaration.gameHash, reveals.map(r => r.secret), declaration.sides);
   if (computedRoll !== roll) throw new Error(`Claimed roll does not match computed roll`);

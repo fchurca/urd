@@ -1,6 +1,6 @@
 {
   "name": "urd",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "URD's Roll Derivation — Verifiable Randomness for Nostr Games",
   "type": "module",
