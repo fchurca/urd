@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { taggedHash, at, MAX_SIDES } from "./util.ts";
 
 export interface GameState {
   hash: string;
@@ -73,21 +74,6 @@ export interface RollResolution {
 export interface VerifyGameResult {
   valid: boolean;
   errors: string[];
-}
-
-function taggedHash(tag: string, ...parts: string[]): string {
-  const tagHash = createHash("sha256").update(tag).digest();
-  const h = createHash("sha256").update(tagHash).update(tagHash);
-  for (const part of parts) h.update(part);
-  return h.digest("hex");
-}
-
-const MAX_SIDES = 2 ** 48;
-
-function at<T>(arr: readonly T[], index: number): T {
-  const val = arr[index];
-  if (val === undefined) throw new Error(`Index ${index} out of bounds`);
-  return val;
 }
 
 function hashState(data: string, prevHash: string | null, timestamp: number, sides?: number): string {

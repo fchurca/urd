@@ -3,8 +3,8 @@
 A Verifiable Randomness Protocol for Decentralized Turn-Based Games
 
 **Status:** proof-of-concept — state chain, secret pool, roll declaration/reveal/resolution,
-and full game verification implemented. Nostr bindings and a demo game client
-are planned but not yet built.
+full game verification, and shared hidden deck protocol implemented. Nostr bindings
+and a demo game client are planned but not yet built.
 
 **URD** 🔮 (pronounced "urd") shares its name with [Urðr](https://en.wikipedia.org/wiki/Ur%C3%B0r),
 one of the Norns who weave the threads of fate in Norse mythology — fitting for a protocol
@@ -125,8 +125,9 @@ reveal event. A peer's secret can be requested the same way for the same
 purpose; the protocol does not care who owns the secret.
 
 **Private draws from shared decks** (e.g., a common pool of advancement cards
-drawn by multiple players without revealing the remaining deck) is a known
-limitation — see [Known Limitations](#known-limitations).
+drawn by multiple players without revealing the remaining deck) is handled by
+the [Deck Protocol](#shared-hidden-decks-sra-protocol) below, using
+commutative encryption (SRA).
 
 ### Multi-source Derivation (Bias Prevention)
 
@@ -223,6 +224,9 @@ Three distinct domain tags are used for domain separation:
 | `taggedHash("urd-commit/v1", seed, author, seqId, secret)` | `urd-commit/v1` | Commitment fingerprints |
 | `taggedHash("urd-state/v1", data, prevHash, timestamp, sides?)` | `urd-state/v1` | Game state hashes |
 | `taggedHash("urd-roll/v1", b64(gameHash) + ":" + b64(s1) + ":" + ...)` | `urd-roll/v1` | Roll derivation |
+| `taggedHash("urd-deck/v1", ...b64(cards))` | `urd-deck/v1` | Deck hashes |
+| `taggedHash("urd-key/v1", b64(e), nonce)` | `urd-key/v1` | Key commitments |
+| `taggedHash("urd-draw/v1", ciphertext, player, nonce)` | `urd-draw/v1` | Draw commitments |
 
 All hash comparisons use string equality (`===`). The roll derivation uses
 rejection sampling on 48-bit extracts from the hash output. Maximum sides
@@ -361,6 +365,176 @@ table below documents every rejection reason across the API.
 | `State ${hash}... does not define sides` | The state exists but has no `sides` field |
 | `State ${hash}... sides must be a finite integer >= 2 and <= 2^48, got ${val}` | The state's `sides` is invalid (NaN, Infinity, <2, or >2^48) |
 
+### Shared Hidden Decks (SRA Protocol)
+
+The deck protocol enables a shared deck (e.g., a common pool of advancement
+cards) where multiple players can draw privately without revealing the
+remaining deck to each other. It uses the
+[Shamir-Rivest-Adleman](https://en.wikipedia.org/wiki/Shamir%27s_three-pass_protocol)
+(SRA) three-pass protocol with commutative encryption over a safe prime group.
+
+**Approach:**
+
+Instead of ZK proofs or cut-and-choose, the protocol defers all verification
+to the point when a card becomes public. Each participant generates an RSA-like
+keypair `(e, d)` where `e * d ≡ 1 mod (p-1)` over a 2048-bit safe prime.
+Encryption and decryption are the same operation: `E(x, k) = x^k mod p`.
+Because `E(E(x, a), b) = E(E(x, b), a)` (commutativity), applying all keys in
+any order and then removing them in reverse order yields the original value.
+
+**Initial values are offset by +2** because 0 and 1 are fixed points of
+modular exponentiation: `0^e ≡ 0` and `1^e ≡ 1` for any `e`. Deck values
+range from `2` to `cardCount + 1`.
+
+**Flow:**
+
+1. **Deck Declaration**: the game master publishes a `DeckDeclaration`
+   specifying the deck `deckId`, `prime` (the safe prime), `participants`,
+   and `cardCount`.
+
+2. **Key Commitment**: each participant generates a keypair `(e, d)` and
+   publishes a `KeyCommitment` binding their public key `e` with a random
+   `nonce`: `taggedHash("urd-key/v1", b64(e), nonce)`.
+
+3. **Shuffle and Encrypt**: in sequence, each participant shuffles the current
+   deck (Fisher-Yates), encrypts every card with their `e`, hashes the
+   ciphertext deck, and publishes a `DeckShuffle` with the `outputDeck` and
+   the `inputDeckHash` (hash of the deck before their turn).
+
+4. **Draw**: to draw a card, a player takes the front ciphertext from the
+   current deck, publishes a `DrawCommitment` binding the ciphertext to their
+   identity, and privately requests each other participant's `d` value. With
+   all `d` values, they decrypt the ciphertext to learn the card.
+
+5. **Public Card Reveal**: when a drawn card must be revealed publicly (e.g.,
+   played in the game), each participant publishes a `PartialReveal` with
+   their `(e, d, nonce)`. The verifier checks:
+   - The draw commitment matches the published ciphertext
+   - Each `(e, nonce)` matches the participant's original `KeyCommitment`
+   - `(e * d) ≡ 1 mod (p-1)`
+   - Applying all `d` values to the ciphertext yields the claimed card
+
+**Lazy, per-card verification:** cards are only verified when they become
+public. Unopened cards in the deck are never verified — trust is deferred to
+game end or until the card is played.
+
+**Important caveat:** once any card is publicly revealed, all participants'
+private keys `d` are disclosed. Anyone can decrypt the remaining deck. Cards
+drawn privately before the reveal remain private only until their draw
+commitment is also publicly revealed.
+
+**Deck types:**
+
+```ts
+interface KeyCommitment {
+  author: string;
+  deckId: string;
+  commitment: string; // taggedHash("urd-key/v1", b64(e), nonce)
+}
+
+interface DeckDeclaration {
+  deckId: string;
+  prime: string;         // base64 of the safe prime
+  participants: string[];
+  cardCount: number;
+}
+
+interface DeckShuffle {
+  deckId: string;
+  author: string;
+  inputDeckHash: string;
+  outputDeck: string[];     // base64 ciphertexts
+  keyCommitment: string;    // commitment hash from KeyCommitment
+}
+
+interface DrawCommitment {
+  deckId: string;
+  player: string;
+  ciphertext: string;       // the drawn card's ciphertext
+  nonce: string;
+  commitment: string;       // taggedHash("urd-draw/v1", ciphertext, player, nonce)
+}
+
+interface PartialReveal {
+  deckId: string;
+  drawCiphertext: string;
+  author: string;
+  e: string;                // base64 public key
+  d: string;                // base64 private key
+  nonce: string;            // same nonce used in KeyCommitment
+}
+
+interface CardReveal {
+  deckId: string;
+  drawCommitment: DrawCommitment;
+  card: number;             // the claimed plaintext value
+  partials: PartialReveal[];
+}
+```
+
+**Deck functions:**
+
+- `createInitialDeck(cardCount)` — creates `[2, 3, ..., cardCount+1]`
+- `shuffleDeck(deck)` — Fisher-Yates shuffle
+- `encryptDeck(deck, key, prime)` — applies `encrypt(card, key, prime)` to each card
+- `hashDeck(deck)` — `taggedHash("urd-deck/v1", ...b64(cards))`
+- `drawCard(deck)` — returns `{card, remaining}` (FIFO from front)
+- `revealCard(ciphertext, keysD, prime)` — applies all `d` values to decrypt
+- `createKeyCommitment(author, deckId, e, nonce)` — returns `KeyCommitment`
+- `createDrawCommitment(deckId, player, ciphertext, nonce)` — returns `DrawCommitment`
+
+**Deck verification functions and error messages:**
+
+#### `verifyDeckDeclaration(decl)`
+
+| Error message | When |
+|---|---|
+| `Deck must have at least 1 card` | `cardCount < 1` |
+| `Deck must have at least one participant` | `participants` is empty |
+| `Unsupported prime` | `prime` does not match the known safe prime |
+
+#### `verifyDeckShuffle(event, inputDeckHash, deckKeyCommitments)`
+
+| Error message | When |
+|---|---|
+| `Deck shuffle input hash does not match: expected ${expected}..., got ${actual}...` | `inputDeckHash` parameter does not match event's `inputDeckHash` |
+| `Deck shuffle output is empty` | `outputDeck` has length 0 |
+| `Duplicate ciphertext in shuffled deck: ${ct}...` | `outputDeck` contains the same ciphertext more than once |
+| `No key commitment found for shuffle author ${author}` | `event.author` has no entry in `deckKeyCommitments` |
+| `Key commitment mismatch for ${author}` | `event.keyCommitment` does not match the stored key commitment for this author |
+| `Key commitment deckId mismatch for ${author}` | The stored key commitment has a different `deckId` than the shuffle event |
+
+#### `verifyDraw(deck, drawCiphertext)`
+
+| Error message | When |
+|---|---|
+| `Drawn ciphertext does not match front of deck` | `drawCiphertext` is not the first element of the current `deck` (FIFO enforcement) |
+
+#### `verifyDrawCommitment(commit, ciphertext, player, nonce)`
+
+| Error message | When |
+|---|---|
+| `Draw commitment does not match` | `taggedHash("urd-draw/v1", ciphertext, player, nonce)` does not equal `commit.commitment` |
+
+#### `verifyKeyCommitment(commit, e, nonce)`
+
+| Error message | When |
+|---|---|
+| `Key commitment does not match` | `taggedHash("urd-key/v1", b64(e), nonce)` does not equal `commit.commitment` |
+
+#### `verifyCardReveal(reveal, deckKeyCommitments, prime)`
+
+| Error message | When |
+|---|---|
+| (propagated from `verifyDrawCommitment`) | Draw commitment validation fails |
+| `Card reveal must include at least one partial reveal` | `partials` is empty |
+| `Partial reveal deckId mismatch for ${author}` | A partial's `deckId` does not match the reveal's `deckId` |
+| `Partial reveal ciphertext does not match draw commitment` | A partial's `drawCiphertext` does not match the draw commitment's `ciphertext` |
+| `No key commitment found for ${author}` | The partial's `author` has no entry in `deckKeyCommitments` |
+| `Key commitment does not match` | `verifyKeyCommitment` fails for the partial's `(e, nonce)` |
+| `Key pair for ${author} is invalid (d * e does not equal 1 mod p-1)` | `(e * d) % (p-1) !== 1` |
+| `Revealed card ${result} does not match claimed card ${card}` | Decrypting the ciphertext with all `d` values yields a different value than `reveal.card` |
+
 ### Design Decisions
 
 - **Domain-separated hashing**: all hashes use BIP-340-style tagged SHA-256.
@@ -417,19 +591,19 @@ reveal) enforced by social consensus or transport policy.
 
 ### Known Limitations
 
-- **Private draws from shared decks** (e.g., a common pool of advancement cards
-  drawn by multiple players without revealing the remaining deck): not yet
-  supported. A future release may address this using commutative primitives
-  (Soon™). For now, each player draws from their own pool (private) or draws
-  are fully revealed.
 - **Non-integer dice**: only integer-sided dice are supported (d2 through
   d2^48). Fudge/Fate dice or weighted outcomes must be mapped to integer
   ranges by the game client.
 - **Browser compatibility**: the reference implementation currently uses
-  Node.js `node:crypto` (provisional — may change). Browsers have the Web
-  Crypto API baked in (`crypto.subtle.digest("SHA-256", ...)`) which provides
-  the same SHA-256 primitive. A browser-compatible build is a matter of
-  baking in the right dependency — not yet done.
+  Node.js `node:crypto`. Browsers have the Web Crypto API baked in
+  (`crypto.subtle.digest("SHA-256", ...)`) which provides the same SHA-256
+  primitive. A browser-compatible build is a matter of baking in the right
+  dependency — not yet done.
+- **Deck key revelation**: once a card is publicly revealed, all participants'
+  encryption keys are disclosed. Anyone can then decrypt the remaining deck.
+  This is inherent to the SRA approach — there is no forward secrecy. Cards
+  that were privately drawn before the reveal remain private only until the
+  draw is also publicly revealed.
 
 ### Nostr Binding (Proposed)
 
@@ -474,10 +648,12 @@ Relevant tags:
    - [x] Composite game verification (`verifyGame`)
    - [x] Security tests (determinism, multi-secret non-predictability,
      distribution uniformity, non-reusability)
+   - [x] Shared hidden decks via SRA commutative encryption (`DeckDeclaration`,
+     `DeckShuffle`, `DrawCommitment`, `PartialReveal`, `CardReveal`,
+     `verifyDeckShuffle`, `verifyDeckDeclaration`, `verifyDraw`,
+     `verifyDrawCommitment`, `verifyKeyCommitment`, `verifyCardReveal`)
 3. Articulate with [Vesta](https://github.com/fchurca/vesta) as a
    work-in-progress demonstrator — a decentralized settlement-building
    board game built on URD
-4. Private draws from shared decks using commutative primitives
-5. Formal protocol specification / whitepaper
-6. ???
-7. Profit!
+4. Formal protocol specification / whitepaper
+5. ???
