@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { taggedHash, at } from "./util.ts";
 import { encrypt, decrypt, bigintToBase64, base64ToBigint, DECK_SAFE_PRIME } from "./sra.ts";
 
@@ -56,7 +57,7 @@ export function createInitialDeck(cardCount: number = 52): bigint[] {
 function fisherYatesShuffle(arr: readonly bigint[]): bigint[] {
   const result = [...arr];
   for (let i = result.length - 1; i > 0; i--) {
-    const pick = Math.floor(Math.random() * (i + 1));
+    const pick = randomInt(i + 1);
     [result[i], result[pick]] = [result[pick]!, result[i]!];
   }
   return result;

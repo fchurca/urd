@@ -1,13 +1,13 @@
 {
   "name": "urd",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "URD's Roll Derivation — Verifiable Randomness for Nostr Games",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test src/index.test.ts src/sra.test.ts src/deck.test.ts"
   },
   "devDependencies": {
     "typescript": "^6",
