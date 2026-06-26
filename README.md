@@ -216,18 +216,17 @@ A complete deck lifecycle — create, shuffle/encrypt with 3 parties, draw a
 card, and publicly reveal it:
 
 ```ts
-import { DECK_SAFE_PRIME, generateKeypair, bigintToBase64, base64ToBigint }
-  from "urd/src/sra.ts";
 import {
+  DECK_SAFE_PRIME, generateKeypair, bigintToBase64,
   createInitialDeck, shuffleDeck, encryptDeck, hashDeck,
   drawCard, revealCard, createKeyCommitment, createDrawCommitment,
   verifyDeckDeclaration, verifyDeckShuffle, verifyDraw,
   verifyCardReveal,
-} from "urd/src/deck.ts";
+} from "urd";
 import type {
   DeckDeclaration, DeckShuffle, KeyCommitment, DrawCommitment,
   CardReveal, PartialReveal,
-} from "urd/src/deck.ts";
+} from "urd";
 
 const p = DECK_SAFE_PRIME;
 const deckId = "game-1";

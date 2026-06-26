@@ -371,3 +371,18 @@ export function findStateInChain(chain: readonly GameState[], hash: string): Gam
   }
   return null;
 }
+
+// SRA (commutative encryption) primitives for hidden decks
+export { DECK_SAFE_PRIME, generateKeypair, encrypt, decrypt, bigintToBase64, base64ToBigint } from "./sra.ts";
+
+// Shared hidden deck protocol — types
+export type {
+  KeyCommitment, DeckDeclaration, DeckShuffle, DrawCommitment, PartialReveal, CardReveal,
+} from "./deck.ts";
+
+// Shared hidden deck protocol — values
+export {
+  createInitialDeck, shuffleDeck, encryptDeck, hashDeck, drawCard, revealCard,
+  createKeyCommitment, createDrawCommitment,
+  verifyDeckDeclaration, verifyDeckShuffle, verifyDraw, verifyDrawCommitment, verifyKeyCommitment, verifyCardReveal,
+} from "./deck.ts";
