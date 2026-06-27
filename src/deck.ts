@@ -36,7 +36,8 @@ export interface PartialReveal {
   drawCiphertext: string;
   author: string;
   e: string;
-  d: string;
+  inputCiphertext: string;
+  outputCiphertext: string;
   nonce: string;
 }
 
@@ -143,18 +144,21 @@ export function verifyCardReveal(
   const { drawCommitment, card, partials } = reveal;
   verifyDrawCommitment(drawCommitment, drawCommitment.ciphertext, drawCommitment.player, drawCommitment.nonce);
   if (partials.length === 0) throw new Error("Card reveal must include at least one partial reveal");
+  let expectedInput = drawCommitment.ciphertext;
   for (const pr of partials) {
     if (pr.deckId !== reveal.deckId) throw new Error(`Partial reveal deckId mismatch for ${pr.author}`);
     if (pr.drawCiphertext !== drawCommitment.ciphertext) throw new Error("Partial reveal ciphertext does not match draw commitment");
+    if (pr.inputCiphertext !== expectedInput) throw new Error(`Partial reveal input chain broken for ${pr.author}`);
     const kc = deckKeyCommitments.get(pr.author);
     if (!kc) throw new Error(`No key commitment found for ${pr.author}`);
     const e = base64ToBigint(pr.e);
-    const d = base64ToBigint(pr.d);
     verifyKeyCommitment(kc, e, pr.nonce);
-    if ((e * d) % (prime - 1n) !== 1n) throw new Error(`Key pair for ${pr.author} is invalid (d * e does not equal 1 mod p-1)`);
+    const input = base64ToBigint(pr.inputCiphertext);
+    const output = base64ToBigint(pr.outputCiphertext);
+    if (encrypt(output, e, prime) !== input) throw new Error(`Invalid partial decryption for ${pr.author}`);
+    expectedInput = pr.outputCiphertext;
   }
-  const keysD = partials.map(pr => base64ToBigint(pr.d));
-  const result = revealCard(base64ToBigint(drawCommitment.ciphertext), keysD, prime);
+  const result = base64ToBigint(expectedInput);
   const expectedCard = BigInt(card);
   if (result !== expectedCard) throw new Error(`Revealed card ${result} does not match claimed card ${card}`);
 }

@@ -281,21 +281,32 @@ const drawNonce = Math.random().toString(36).slice(2);
 const drawCommit = createDrawCommitment(deckId, "alice", ctB64, drawNonce);
 
 // Later, Alice reveals the card publicly.
-// Each participant publishes their (e, d, nonce) in a PartialReveal:
-const partialReveals: PartialReveal[] = players.map(player => ({
-  deckId,
-  drawCiphertext: ctB64,
-  author: player,
-  e: bigintToBase64(keypairs.get(player)!.e),
-  d: bigintToBase64(keypairs.get(player)!.d),
-  nonce: nonces.get(player)!,
-}));
+// Participants publish PartialReveal events in sequence,
+// each removing one layer of encryption:
+const partialReveals: PartialReveal[] = [];
+let input = ctB64;
+for (const player of players) {
+  const kp = keypairs.get(player)!;
+  const output = bigintToBase64(
+    decrypt(base64ToBigint(input), kp.d, p),
+  );
+  partialReveals.push({
+    deckId,
+    drawCiphertext: ctB64,
+    author: player,
+    e: bigintToBase64(kp.e),
+    inputCiphertext: input,
+    outputCiphertext: output,
+    nonce: nonces.get(player)!,
+  });
+  input = output;
+}
 
-// Alice decrypts the card with all d values
+// Alice decrypts the card privately using d values obtained out-of-band
 const allD = players.map(player => keypairs.get(player)!.d);
 const cardValue = revealCard(ciphertext, allD, p);
 
-// Anyone can verify the public reveal
+// Anyone can verify the public reveal chain
 const cardReveal: CardReveal = {
   deckId,
   drawCommitment: drawCommit,
@@ -517,30 +528,35 @@ range from `2` to `cardCount + 1`.
    the `inputDeckHash` (hash of the deck before their turn).
 
 4. **Draw**: to draw a card, a player publishes a `DrawCommitment` binding
-   the front ciphertext to their identity. They then obtain each other
-   participant's `d` value — either privately (out-of-band, for hidden
-   draws) or from a `PartialReveal` event (when the card must later become
-   public). With all `d` values, `revealCard(ciphertext, keysD, prime)`
-   decrypts the card locally.
+   the front ciphertext to their identity. To learn the card value, each
+   other participant privately computes a partial decryption
+   `partialDraw = ciphertext^d mod p` and sends it to the drawer
+   (out-of-band, or encrypted via transport). With all partial decryptions,
+   `revealCard(ciphertext, keysD, prime)` decrypts the card locally. The
+   drawer's own partial decryption is computed using the `d` values they
+   obtained out-of-band from each participant.
 
 5. **Public Card Reveal**: when the drawn card must be revealed publicly
-   (e.g., played in the game), each participant publishes a `PartialReveal`
-   with their `(e, d, nonce)`. The verifier checks:
+   (e.g., played in the game), participants publish `PartialReveal` events
+   in sequence — each one removes one layer of encryption. The first
+   partial takes the draw ciphertext as input and outputs
+   `ciphertext^d_p1 mod p`; the second takes that output and decrypts
+   further, and so on. The verifier checks:
+
    - The draw commitment matches the published ciphertext
    - Each `(e, nonce)` matches the participant's original `KeyCommitment`
-   - `(e * d) ≡ 1 mod (p-1)`
-   - Applying all `d` values to the ciphertext yields the claimed card
+   - `partialOutput^e ≡ partialInput (mod p)` — proves the participant
+     correctly removed their encryption layer without revealing `d`
+   - The chain links: each partial's input equals the previous partial's
+     output, and the first partial's input equals the draw ciphertext
+   - The final partial's output equals the claimed card value
 
-**Lazy, per-card verification:** cards are only verified when they become
-public. At game end, all participants can reveal their keys and every drawn
-card can be verified from the published events.
-
-**Important caveat:** once any card is publicly revealed, all participants'
-private keys `d` are disclosed. Anyone can then decrypt **every** ciphertext
-in the deck, including those drawn privately earlier (whose ciphertexts are
-already public in their `DrawCommitment` events). The only protection is
-timing: a card drawn and played before any key revelation stays hidden until
-that moment.
+**No private keys are ever disclosed.** Unlike a design that publishes
+`(e, d)` directly, this protocol reveals only the result of decrypting a
+*single, specific ciphertext*. Participants keep their private exponent
+`d` secret throughout the game. A public card reveal exposes only the
+partial decryption of that one card — the remaining deck stays encrypted
+even after any number of public reveals.
 
 **Deck types:**
 
@@ -579,7 +595,8 @@ interface PartialReveal {
   drawCiphertext: string;
   author: string;
   e: string;                // base64 public key
-  d: string;                // base64 private key
+  inputCiphertext: string;  // base64 ciphertext before this participant's decryption
+  outputCiphertext: string; // base64 ciphertext after this participant's decryption
   nonce: string;            // same nonce used in KeyCommitment
 }
 
@@ -657,10 +674,11 @@ interface CardReveal {
 | `Card reveal must include at least one partial reveal` | `partials` is empty |
 | `Partial reveal deckId mismatch for ${author}` | A partial's `deckId` does not match the reveal's `deckId` |
 | `Partial reveal ciphertext does not match draw commitment` | A partial's `drawCiphertext` does not match the draw commitment's `ciphertext` |
+| `Partial reveal input chain broken for ${author}` | A partial's `inputCiphertext` does not match the previous partial's `outputCiphertext` (or the draw ciphertext for the first partial) |
 | `No key commitment found for ${author}` | The partial's `author` has no entry in `deckKeyCommitments` |
 | `Key commitment does not match` | `verifyKeyCommitment` fails for the partial's `(e, nonce)` |
-| `Key pair for ${author} is invalid (d * e does not equal 1 mod p-1)` | `(e * d) % (p-1) !== 1` |
-| `Revealed card ${result} does not match claimed card ${card}` | Decrypting the ciphertext with all `d` values yields a different value than `reveal.card` |
+| `Invalid partial decryption for ${author}` | `outputCiphertext^e mod p` does not equal `inputCiphertext` — the participant did not correctly remove their encryption layer |
+| `Revealed card ${result} does not match claimed card ${card}` | The final partial decryption output does not equal the claimed card value |
 
 ### Design Decisions
 
@@ -699,20 +717,25 @@ interface CardReveal {
   (281,474,976,710,656) faces, defined as `MAX_SIDES` in the reference
   implementation.
 - **SRA for shared decks**: commutative encryption (SRA) was chosen over
-  cut-and-choose or ZK proofs because it enables private draws with a single
-  message per participant per round. The deferred verification model (keys are
-  revealed only when a card becomes public) keeps the setup phase lightweight
-  — no interactive proofs needed at shuffle time.
+   cut-and-choose or ZK proofs because it enables private draws with a single
+   message per participant per round. The verification model uses a
+   *partial decryption chain*: each participant reveals only the result of
+   decrypting a specific ciphertext (`partialDecrypt = input^d mod p`),
+   which is verified by re-encrypting with the public key
+   (`partialDecrypt^e mod p == input`). No private exponent `d` is ever
+   disclosed — the remaining deck stays encrypted even after any number of
+   public card reveals.
 - **Offset by +2**: deck values start at 2 instead of 0 or 1 because `0^e ≡ 0`
-  and `1^e ≡ 1` for any exponent. These fixed points would leak information
-  about the card value through the ciphertext. Offsetting also eliminates the
-  need to handle 0-values in the game logic (card 0 is unused).
-- **Per-card key revelation**: each `PartialReveal` carries a participant's
-  full private key `d` for that deck. This means any public card reveal
-  discloses all keys — the remaining deck becomes decryptable by anyone. This
-  is a deliberate tradeoff: layout verification is simple (no ZK), and cards
-  that were privately drawn before the reveal remain private until their draw
-  commitment is also revealed.
+   and `1^e ≡ 1` for any exponent. These fixed points would leak information
+   about the card value through the ciphertext. Offsetting also eliminates the
+   need to handle 0-values in the game logic (card 0 is unused).
+- **Partial decryption chain**: participants decrypt a card sequentially in
+   public `PartialReveal` events. Each reveal removes one layer of encryption
+   and is independently verifiable via `output^e ≡ input (mod p)`. The chain
+   is ordered: the first partial's input is the draw ciphertext, each
+   subsequent partial's input is the previous partial's output, and the
+   final output is the plaintext card value. This avoids exposing private keys
+   while keeping verification simple — no ZK proofs needed.
 
 ### Repudiation
 
@@ -741,11 +764,11 @@ reveal) enforced by social consensus or transport policy.
   (`crypto.subtle.digest("SHA-256", ...)`) which provides the same SHA-256
   primitive. A browser-compatible build is a matter of baking in the right
   dependency — not yet done.
-- **Deck key revelation**: once a card is publicly revealed, all participants'
-  encryption keys are disclosed. Anyone can then decrypt the remaining deck.
-  This is inherent to the SRA approach — there is no forward secrecy. Cards
-  that were privately drawn before the reveal remain private only until the
-  draw is also publicly revealed.
+- **Partial decryption chaining**: public card reveals require sequential
+  `PartialReveal` events — each participant must see the previous partial
+  before computing their own. This adds latency compared to the batch reveals
+  used in the key-revelation design. For turn-based games the delay is
+  acceptable; for real-time games it may be a constraint.
 
 ### Nostr Binding (Proposed)
 

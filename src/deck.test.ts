@@ -219,7 +219,7 @@ describe("Other verifier rejections", () => {
 
   it("verifyCardReveal rejects partial reveal deckId mismatch", () => {
     const drawCommit: DrawCommitment = { deckId: "d1", player: "alice", ciphertext: "x", nonce: "n", commitment: "ignored" };
-    const partials: PartialReveal[] = [{ deckId: "d2", drawCiphertext: "x", author: "alice", e: bigintToBase64(3n), d: bigintToBase64(7n), nonce: "n" }];
+    const partials: PartialReveal[] = [{ deckId: "d2", drawCiphertext: "x", author: "alice", e: bigintToBase64(3n), inputCiphertext: "x", outputCiphertext: "y", nonce: "n" }];
     const reveal: CardReveal = { deckId: "d1", drawCommitment: drawCommit, card: 5, partials };
     throws(() => verifyCardReveal(reveal, new Map(), p));
   });
@@ -356,17 +356,22 @@ describe("Draw and reveal one card", () => {
 
     // PartialReveal uses the same nonce as the KeyCommitment
     const partialReveals: PartialReveal[] = [];
+    let current = ctB64;
     for (const player of players) {
       const kp = keypairs.get(player)!;
+      const input = current;
+      const output = bigintToBase64(decrypt(base64ToBigint(input), kp.d, p));
       const pr: PartialReveal = {
         deckId,
         drawCiphertext: ctB64,
         author: player,
         e: bigintToBase64(kp.e),
-        d: bigintToBase64(kp.d),
+        inputCiphertext: input,
+        outputCiphertext: output,
         nonce: nonces.get(player)!,
       };
       partialReveals.push(pr);
+      current = output;
     }
 
     // Alice applies all d values to learn the card
@@ -426,16 +431,21 @@ describe("Draw and reveal one card", () => {
     const drawCommit = createDrawCommitment(deckId, "alice", ctB64, drawNonce);
 
     const partialReveals: PartialReveal[] = [];
+    let current = ctB64;
     for (const player of players) {
       const kp = keypairs.get(player)!;
+      const input = current;
+      const output = bigintToBase64(decrypt(base64ToBigint(input), kp.d, p));
       partialReveals.push({
         deckId,
         drawCiphertext: ctB64,
         author: player,
         e: bigintToBase64(kp.e),
-        d: bigintToBase64(kp.d),
+        inputCiphertext: input,
+        outputCiphertext: output,
         nonce: nonces.get(player)!,
       });
+      current = output;
     }
 
     const badReveal: CardReveal = {
@@ -501,16 +511,21 @@ describe("Draw and reveal entire deck", () => {
       const drawCommit = createDrawCommitment(deckId, drawer, ctB64, drawNonce);
 
       const partialReveals: PartialReveal[] = [];
+      let current = ctB64;
       for (const player of deckPlayers) {
         const kp = keypairs.get(player)!;
+        const input = current;
+        const output = bigintToBase64(decrypt(base64ToBigint(input), kp.d, p));
         partialReveals.push({
           deckId,
           drawCiphertext: ctB64,
           author: player,
           e: bigintToBase64(kp.e),
-          d: bigintToBase64(kp.d),
+          inputCiphertext: input,
+          outputCiphertext: output,
           nonce: nonces.get(player)!,
         });
+        current = output;
       }
 
       const allD = deckPlayers.map(player => keypairs.get(player)!.d);
