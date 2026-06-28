@@ -383,6 +383,6 @@ export type {
 // Shared hidden deck protocol — values
 export {
   createInitialDeck, shuffleDeck, encryptDeck, hashDeck, drawCard, revealCard,
-  createKeyCommitment, createDrawCommitment,
-  verifyDeckDeclaration, verifyDeckShuffle, verifyDraw, verifyDrawCommitment, verifyKeyCommitment, verifyCardReveal,
+  createKeyCommitment, createDrawCommitment, createPermCommitment,
+  verifyDeckDeclaration, verifyDeckShuffle, verifyDraw, verifyDrawCommitment, verifyKeyCommitment, verifyCardReveal, verifyDeckShufflePerm,
 } from "./deck.ts";

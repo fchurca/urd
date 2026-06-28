@@ -23,6 +23,8 @@ import {
   verifyKeyCommitment,
   revealCard,
   verifyCardReveal,
+  createPermCommitment,
+  verifyDeckShufflePerm,
 } from "./deck.ts";
 import type {
   DeckShuffle,
@@ -127,6 +129,7 @@ describe("Deck creation", () => {
       inputDeckHash: "",
       outputDeck: ["abc"],
       keyCommitment: "nonexistent",
+      permCommitment: "0".repeat(64),
     };
     throws(() => verifyDeckShuffle(event, "", emptyMap));
   });
@@ -141,6 +144,7 @@ describe("Deck creation", () => {
       inputDeckHash: "abc",
       outputDeck: ["x"],
       keyCommitment: "c1",
+      permCommitment: "0".repeat(64),
     };
     throws(() => verifyDeckShuffle(event, "def", map));
   });
@@ -155,6 +159,7 @@ describe("Deck creation", () => {
       inputDeckHash: "",
       outputDeck: [],
       keyCommitment: "c1",
+      permCommitment: "0".repeat(64),
     };
     throws(() => verifyDeckShuffle(event, "", map));
   });
@@ -169,6 +174,7 @@ describe("Deck creation", () => {
       inputDeckHash: "",
       outputDeck: ["a", "a"],
       keyCommitment: "c1",
+      permCommitment: "0".repeat(64),
     };
     throws(() => verifyDeckShuffle(event, "", map));
   });
@@ -183,6 +189,7 @@ describe("Deck creation", () => {
       inputDeckHash: "",
       outputDeck: ["x"],
       keyCommitment: "fake-commitment",
+      permCommitment: "0".repeat(64),
     };
     throws(() => verifyDeckShuffle(event, "", map));
   });
@@ -196,6 +203,22 @@ describe("Deck creation", () => {
       inputDeckHash: "",
       outputDeck: ["x"],
       keyCommitment: "c1",
+      permCommitment: "0".repeat(64),
+    };
+    throws(() => verifyDeckShuffle(event, "", map));
+  });
+
+  it("verifyDeckShuffle rejects invalid permCommitment format", () => {
+    const deckId = "test-deck";
+    const kc: KeyCommitment = { author: "alice", deckId, commitment: "c1" };
+    const map = new Map<string, KeyCommitment>([["alice", kc]]);
+    const event: DeckShuffle = {
+      deckId,
+      author: "alice",
+      inputDeckHash: "",
+      outputDeck: ["x"],
+      keyCommitment: "c1",
+      permCommitment: "not-hex",
     };
     throws(() => verifyDeckShuffle(event, "", map));
   });
@@ -256,6 +279,7 @@ describe("3-party deck creation", () => {
         inputDeckHash: prevHash,
         outputDeck: currentDeck.map(c => bigintToBase64(c)),
         keyCommitment: keyCommitments.get(player)!.commitment,
+        permCommitment: "0".repeat(64),
       };
       if (prevHash !== "") doesNotThrow(() => verifyDeckShuffle(event, prevHash, keyCommitments));
       prevHash = deckHash;
@@ -340,6 +364,7 @@ describe("Draw and reveal one card", () => {
         inputDeckHash: prevHash,
         outputDeck: currentDeck.map(c => bigintToBase64(c)),
         keyCommitment: keyCommitments.get(player)!.commitment,
+        permCommitment: "0".repeat(64),
       };
       if (prevHash !== "") doesNotThrow(() => verifyDeckShuffle(event, prevHash, keyCommitments));
       prevHash = deckHash;
@@ -420,6 +445,7 @@ describe("Draw and reveal one card", () => {
         inputDeckHash: prevHash,
         outputDeck: currentDeck.map(c => bigintToBase64(c)),
         keyCommitment: keyCommitments.get(player)!.commitment,
+        permCommitment: "0".repeat(64),
       };
       if (prevHash !== "") doesNotThrow(() => verifyDeckShuffle(event, prevHash, keyCommitments));
       prevHash = deckHash;
@@ -490,6 +516,7 @@ describe("Draw and reveal entire deck", () => {
         inputDeckHash: prevHash,
         outputDeck: currentDeck.map(c => bigintToBase64(c)),
         keyCommitment: keyCommitments.get(player)!.commitment,
+        permCommitment: "0".repeat(64),
       };
       if (prevHash !== "") doesNotThrow(() => verifyDeckShuffle(event, prevHash, keyCommitments));
       prevHash = deckHash;
@@ -545,5 +572,82 @@ describe("Draw and reveal entire deck", () => {
     equal(allReveals.length, 52);
     const allCards = allReveals.map(r => r.card).sort((a, b) => a - b);
     for (let i = 0; i < 52; i++) equal(allCards[i], i + 2);
+  });
+});
+
+describe("verifyDeckShufflePerm", () => {
+  it("accepts valid perm commitment", () => {
+    const deck = createInitialDeck(5);
+    const perm = [2, 0, 4, 1, 3];
+    const kp = generateKeypair(p);
+    const deckId = "test-perm";
+    const inputHash = hashDeck(deck);
+    const shuffled = perm.map(i => deck[i]!);
+    const encrypted = encryptDeck(shuffled, kp.e, p);
+    const outputDeck = encrypted.map(c => bigintToBase64(c));
+    const permCommitment = createPermCommitment(deckId, "alice", inputHash, perm);
+    const event: DeckShuffle = { deckId, author: "alice", inputDeckHash: inputHash, outputDeck, keyCommitment: "x", permCommitment };
+    doesNotThrow(() => verifyDeckShufflePerm(event, deck.map(c => bigintToBase64(c)), kp.e, perm, p));
+  });
+
+  it("rejects wrong permutation length", () => {
+    const deck = createInitialDeck(5);
+    const kp = generateKeypair(p);
+    const deckId = "test-perm";
+    const inputHash = hashDeck(deck);
+    const event: DeckShuffle = {
+      deckId, author: "alice", inputDeckHash: inputHash,
+      outputDeck: encryptDeck(deck, kp.e, p).map(c => bigintToBase64(c)),
+      keyCommitment: "x", permCommitment: "00",
+    };
+    throws(() => verifyDeckShufflePerm(event, deck.map(c => bigintToBase64(c)), kp.e, [0, 1], p));
+  });
+
+  it("rejects out of bounds index", () => {
+    const deck = createInitialDeck(3);
+    const kp = generateKeypair(p);
+    const deckId = "test-perm";
+    const inputHash = hashDeck(deck);
+    const event: DeckShuffle = { deckId, author: "alice", inputDeckHash: inputHash, outputDeck: ["a"], keyCommitment: "x", permCommitment: "00" };
+    throws(() => verifyDeckShufflePerm(event, deck.map(c => bigintToBase64(c)), kp.e, [99], p));
+  });
+
+  it("rejects duplicate index", () => {
+    const deck = createInitialDeck(3);
+    const kp = generateKeypair(p);
+    const deckId = "test-perm";
+    const inputHash = hashDeck(deck);
+    const event: DeckShuffle = { deckId, author: "alice", inputDeckHash: inputHash, outputDeck: ["a", "b"], keyCommitment: "x", permCommitment: "00" };
+    throws(() => verifyDeckShufflePerm(event, deck.map(c => bigintToBase64(c)), kp.e, [0, 0], p));
+  });
+
+  it("rejects commitment mismatch", () => {
+    const deck = createInitialDeck(3);
+    const perm = [0, 1, 2];
+    const kp = generateKeypair(p);
+    const deckId = "test-perm";
+    const inputHash = hashDeck(deck);
+    const event: DeckShuffle = {
+      deckId, author: "alice", inputDeckHash: inputHash,
+      outputDeck: encryptDeck(deck, kp.e, p).map(c => bigintToBase64(c)),
+      keyCommitment: "x", permCommitment: "wrong",
+    };
+    throws(() => verifyDeckShufflePerm(event, deck.map(c => bigintToBase64(c)), kp.e, perm, p));
+  });
+
+  it("rejects re-encryption mismatch", () => {
+    const deck = createInitialDeck(3);
+    const perm = [2, 0, 1];
+    const kp = generateKeypair(p);
+    const deckId = "test-perm";
+    const inputHash = hashDeck(deck);
+    const shuffled = perm.map(i => deck[i]!);
+    const encrypted = encryptDeck(shuffled, kp.e, p);
+    const outputDeck = encrypted.map(c => bigintToBase64(c));
+    // Mess up one output ciphertext
+    outputDeck[0] = bigintToBase64(999n);
+    const permCommitment = createPermCommitment(deckId, "alice", inputHash, perm);
+    const event: DeckShuffle = { deckId, author: "alice", inputDeckHash: inputHash, outputDeck, keyCommitment: "x", permCommitment };
+    throws(() => verifyDeckShufflePerm(event, deck.map(c => bigintToBase64(c)), kp.e, perm, p));
   });
 });

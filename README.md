@@ -121,6 +121,7 @@ FIFO ordering and prevent reuse.
 12. `verifyDrawCommitment(commit, ciphertext, player, nonce)` — draw commitment hash
 13. `verifyKeyCommitment(commit, e, nonce)` — key commitment hash
 14. `verifyCardReveal(reveal, deckKeyCommitments, prime)` — revealed card correctness
+15. `verifyDeckShufflePerm(event, inputDeck, e, perm, prime)` — deferred permutation verification
 
 **Hidden information / private draws:** A player publishes a roll declaration
 naming their own commitment. They reveal privately (keep the reveal event
@@ -262,12 +263,13 @@ for (const player of players) {
   currentDeck = shuffleDeck(currentDeck);
   currentDeck = encryptDeck(currentDeck, kp.e, p);
   const deckHash = hashDeck(currentDeck);
-  const event: DeckShuffle = {
-    deckId, author: player, inputDeckHash: prevHash,
-    outputDeck: currentDeck.map(c => bigintToBase64(c)),
-    keyCommitment: keyCommitments.get(player)!.commitment,
-  };
-  verifyDeckShuffle(event, prevHash, keyCommitments);
+   const event: DeckShuffle = {
+     deckId, author: player, inputDeckHash: prevHash,
+     outputDeck: currentDeck.map(c => bigintToBase64(c)),
+     keyCommitment: keyCommitments.get(player)!.commitment,
+     permCommitment: "0".repeat(64),
+   };
+   verifyDeckShuffle(event, prevHash, keyCommitments);
   prevHash = deckHash;
 }
 
@@ -344,6 +346,12 @@ The following domain tags are used for domain separation:
 | `taggedHash("urd-deck/v1", ...b64(cards))` | `urd-deck/v1` | Deck hashes |
 | `taggedHash("urd-key/v1", b64(e), nonce)` | `urd-key/v1` | Key commitments |
 | `taggedHash("urd-draw/v1", ciphertext, player, nonce)` | `urd-draw/v1` | Draw commitments |
+| `taggedHash("urd-perm/v1", deckId, author, inputDeckHash, JSON.stringify(perm))` | `urd-perm/v1` | Permutation commitments |
+
+> **Cross-implementation note:** `JSON.stringify(perm)` produces no spaces between
+> elements in V8 (e.g., `[1,2,3]`). Reimplementations must match this exact
+> format — arrays must serialize with no whitespace. A canonical encoding is
+> recommended for any formal protocol specification.
 
 All hash comparisons use string equality (`===`). The roll derivation uses
 rejection sampling on 48-bit extracts from the hash output. Maximum sides
@@ -354,7 +362,7 @@ value is `2^48` (281,474,976,710,656).
 The reference uses the 2048-bit MODP group #14 from RFC 3526 as `DECK_SAFE_PRIME`.
 Encryption and decryption are the same operation: `E(x, k) = x^k mod p`.
 Key generation picks a random odd `e > 2` and computes `d = e^{-1} mod (p-1)`.
-Bigint values are serialized as unpadded base64 of their big-endian hex
+Bigint values are serialized as standard base64 of their big-endian hex
 representation.
 
 ### Security Properties
@@ -580,6 +588,7 @@ interface DeckShuffle {
   inputDeckHash: string;
   outputDeck: string[];     // base64 ciphertexts
   keyCommitment: string;    // commitment hash from KeyCommitment
+  permCommitment: string;   // taggedHash("urd-perm/v1", deckId, author, inputDeckHash, JSON.stringify(perm))
 }
 
 interface DrawCommitment {
@@ -626,6 +635,7 @@ interface CardReveal {
 - `revealCard(ciphertext, keysD, prime)` — applies all `d` values to decrypt
 - `createKeyCommitment(author, deckId, e, nonce)` — returns `KeyCommitment`
 - `createDrawCommitment(deckId, player, ciphertext, nonce)` — returns `DrawCommitment`
+- `createPermCommitment(deckId, author, inputDeckHash, perm)` — returns permutation commitment hash
 
 **Deck verification functions and error messages:**
 
@@ -647,6 +657,7 @@ interface CardReveal {
 | `No key commitment found for shuffle author ${author}` | `event.author` has no entry in `deckKeyCommitments` |
 | `Key commitment mismatch for ${author}` | `event.keyCommitment` does not match the stored key commitment for this author |
 | `Key commitment deckId mismatch for ${author}` | The stored key commitment has a different `deckId` than the shuffle event |
+| `Permutation commitment must be a 64-char hex string` | `event.permCommitment` is not a valid 64-character hex string |
 
 #### `verifyDraw(deck, drawCiphertext)`
 
@@ -679,6 +690,20 @@ interface CardReveal {
 | `Key commitment does not match` | `verifyKeyCommitment` fails for the partial's `(e, nonce)` |
 | `Invalid partial decryption for ${author}` | `outputCiphertext^e mod p` does not equal `inputCiphertext` — the participant did not correctly remove their encryption layer |
 | `Revealed card ${result} does not match claimed card ${card}` | The final partial decryption output does not equal the claimed card value |
+
+#### `verifyDeckShufflePerm(event, inputDeck, e, perm, prime)`
+
+| Error message | When |
+|---|---|
+| `Permutation length ${n} does not match deck size ${m}` | `perm.length` does not match `inputDeck.length` |
+| `Permutation index out of bounds` | A value in `perm` is < 0 or ≥ the deck size |
+| `Duplicate index in permutation` | A value appears more than once in `perm` |
+| `Permutation commitment does not match` | `createPermCommitment(event.deckId, event.author, event.inputDeckHash, perm)` does not equal `event.permCommitment` |
+| `Re-encryption mismatch at position ${i}` | `encrypt(inputDeck[perm[i]], e, prime)` does not equal `event.outputDeck[i]` |
+
+> **Note:** the caller must verify that `e` matches the shuffler's `KeyCommitment`
+> before calling `verifyDeckShufflePerm`. This function does not cross-reference
+> `event.keyCommitment` — it uses whatever `e` is provided.
 
 ### Design Decisions
 
@@ -736,6 +761,13 @@ interface CardReveal {
    subsequent partial's input is the previous partial's output, and the
    final output is the plaintext card value. This avoids exposing private keys
    while keeping verification simple — no ZK proofs needed.
+- **Verifiable shuffle via committed permutation**: each shuffler publishes a
+   `permCommitment = taggedHash("urd-perm/v1", deckId, author, inputDeckHash, JSON.stringify(perm))`
+   at shuffle time. The permutation itself is kept secret during gameplay.
+   When the game ends (or when `e` becomes known), the shuffler reveals `perm`
+   and anyone can verify via `verifyDeckShufflePerm` that the output deck
+   matches `encrypt(inputDeck[perm[i]], e, prime)` for each position. This
+   enables full shuffle integrity verification without interactive proofs.
 
 ### Repudiation
 
@@ -765,10 +797,16 @@ reveal) enforced by social consensus or transport policy.
   primitive. A browser-compatible build is a matter of baking in the right
   dependency — not yet done.
 - **Partial decryption chaining**: public card reveals require sequential
-  `PartialReveal` events — each participant must see the previous partial
-  before computing their own. This adds latency compared to the batch reveals
-  used in the key-revelation design. For turn-based games the delay is
-  acceptable; for real-time games it may be a constraint.
+   `PartialReveal` events — each participant must see the previous partial
+   before computing their own. This adds latency compared to the batch reveals
+   used in the key-revelation design. For turn-based games the delay is
+   acceptable; for real-time games it may be a constraint.
+- **Deferred shuffle verification**: `verifyDeckShufflePerm` requires knowing
+   the shuffler's public key `e` and the permutation `perm`, which are only
+   available after the participant reveals them (typically at game end). During
+   gameplay, only `permCommitment` is published — verification is deferred.
+   A malicious shuffler could reorder cards in a way that is not detectable
+   until game-end verification.
 
 ### Nostr Binding (Proposed)
 

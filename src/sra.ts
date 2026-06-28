@@ -38,10 +38,12 @@ function bigIntFromBytes(bytes: Uint8Array): bigint {
 export function generateKeypair(prime: bigint): { e: bigint; d: bigint } {
   const bits = prime.toString(2).length;
   const bytes = Math.ceil(bits / 8);
+  const range = 1n << BigInt(bytes * 8);
+  const maxAcceptable = range - (range % prime);
   let e: bigint;
   do {
-    e = bigIntFromBytes(randomBytes(bytes)) % prime;
-  } while (e < 2n || e % 2n === 0n);
+    e = bigIntFromBytes(randomBytes(bytes));
+  } while (e >= maxAcceptable || e < 2n || e % 2n === 0n);
   const d = modInverse(e, prime - 1n);
   return { e, d };
 }

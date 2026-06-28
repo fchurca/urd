@@ -21,6 +21,7 @@ export interface DeckShuffle {
   inputDeckHash: string;
   outputDeck: string[];
   keyCommitment: string;
+  permCommitment: string;
 }
 
 export interface DrawCommitment {
@@ -83,6 +84,10 @@ export function verifyDeckDeclaration(decl: DeckDeclaration): void {
   if (prime !== DECK_SAFE_PRIME) throw new Error("Unsupported prime");
 }
 
+export function createPermCommitment(deckId: string, author: string, inputDeckHash: string, perm: readonly number[]): string {
+  return taggedHash("urd-perm/v1", deckId, author, inputDeckHash, JSON.stringify(perm));
+}
+
 export function verifyDeckShuffle(event: DeckShuffle, inputDeckHash: string, deckKeyCommitments: Map<string, KeyCommitment>): void {
   if (event.inputDeckHash !== inputDeckHash) {
     throw new Error(`Deck shuffle input hash does not match: expected ${inputDeckHash.slice(0, 8)}..., got ${event.inputDeckHash.slice(0, 8)}...`);
@@ -93,6 +98,7 @@ export function verifyDeckShuffle(event: DeckShuffle, inputDeckHash: string, dec
     if (seen.has(ct)) throw new Error(`Duplicate ciphertext in shuffled deck: ${ct.slice(0, 8)}...`);
     seen.add(ct);
   }
+  if (!/^[0-9a-f]{64}$/i.test(event.permCommitment)) throw new Error("Permutation commitment must be a 64-char hex string");
   const kc = deckKeyCommitments.get(event.author);
   if (!kc) throw new Error(`No key commitment found for shuffle author ${event.author}`);
   if (kc.commitment !== event.keyCommitment) throw new Error(`Key commitment mismatch for ${event.author}`);
@@ -161,4 +167,28 @@ export function verifyCardReveal(
   const result = base64ToBigint(expectedInput);
   const expectedCard = BigInt(card);
   if (result !== expectedCard) throw new Error(`Revealed card ${result} does not match claimed card ${card}`);
+}
+
+export function verifyDeckShufflePerm(
+  event: DeckShuffle,
+  inputDeck: readonly string[],
+  e: bigint,
+  perm: readonly number[],
+  prime: bigint,
+): void {
+  const n = inputDeck.length;
+  if (perm.length !== n) throw new Error(`Permutation length ${perm.length} does not match deck size ${n}`);
+  const seen = new Set<number>();
+  for (const idx of perm) {
+    if (idx < 0 || idx >= n) throw new Error("Permutation index out of bounds");
+    if (seen.has(idx)) throw new Error("Duplicate index in permutation");
+    seen.add(idx);
+  }
+  const expectedCommit = createPermCommitment(event.deckId, event.author, event.inputDeckHash, perm);
+  if (expectedCommit !== event.permCommitment) throw new Error("Permutation commitment does not match");
+  for (let i = 0; i < n; i++) {
+    const expected = encrypt(base64ToBigint(at(inputDeck, at(perm, i))), e, prime);
+    const actual = base64ToBigint(at(event.outputDeck, i));
+    if (expected !== actual) throw new Error(`Re-encryption mismatch at position ${i}`);
+  }
 }
